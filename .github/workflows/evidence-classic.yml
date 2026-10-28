@@ -51,7 +51,10 @@ jobs:
         timeout-minutes: 5
         run: |
           sudo apt-get update -q
-          sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools
+          # This fork's runner is Ubuntu 24.04, whose qemu-user-binfmt isn't
+          # static: qemu-user-static, as dev/emulate says for older releases.
+          sudo apt-get install -yq --no-install-recommends qemu-user-static dosfstools
+          set -o pipefail
           sudo dev/emulate-classic "$RUNNER_TEMP/tree" "$RUNNER_TEMP/pictures" "$RUNNER_TEMP/classic" 2>&1 | tee "$RUNNER_TEMP/run.txt"
       - name: Collect
         if: always()
