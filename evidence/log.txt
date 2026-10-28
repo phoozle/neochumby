@@ -1,0 +1,20 @@
+neochumby: opening classic
+manifest /tmp/classic: 15 pages, 105 screens, 169 files, 21871 KB (0 KB kept in memory)
+neochumby: service classic started
+neochumby-classic-service: classic in front
+neochumby: the top button: told classic
+neochumby: the top button: told classic
+neochumby: the top button: told classic
+app: asked for doom
+neochumby: classic asks: open doom
+neochumby: opening doom
+neochumby-classic-service: doom in front
+neochumby-doom: no IWAD found (set NEOCHUMBY_WAD)
+neochumby: doom ended: Ok(ExitStatus(unix_wait_status(256)))
+neochumby: opening classic
+neochumby-classic-service: classic in front
+manifest /tmp/classic: 15 pages, 105 screens, 169 files, 21871 KB (0 KB kept in memory)
+neochumby: the top button: told classic
+chumby: back to the Chumby
+neochumby: classic asks: chumby-mode
+neochumby: CHUMBY MODE

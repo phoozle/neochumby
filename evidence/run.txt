@@ -1,0 +1,36 @@
+== boot classic
+dev/emulate: running (/home/runner/work/_temp/classic/state); the session's output: dev/emulate log
+0.95 weather_current_night.raw
+== the top button: Home, and back
+0.74 home_night.raw
+0.67 weather_current_night.raw
+== APPS, then DOOM: Doom through the pipe, and back
+0.74 home_night.raw
+1.00 apps_p0_night.raw
+0.95 weather_current_night.raw
+== CHUMBY on Home
+0.74 home_night.raw
+1.00 confirm_night.raw
+exit 0
+-- the session's log:
+neochumby: opening classic
+manifest /tmp/classic: 15 pages, 105 screens, 169 files, 21871 KB (0 KB kept in memory)
+neochumby: service classic started
+neochumby-classic-service: classic in front
+neochumby: the top button: told classic
+neochumby: the top button: told classic
+neochumby: the top button: told classic
+app: asked for doom
+neochumby: classic asks: open doom
+neochumby: opening doom
+neochumby-classic-service: doom in front
+neochumby-doom: no IWAD found (set NEOCHUMBY_WAD)
+neochumby: doom ended: Ok(ExitStatus(unix_wait_status(256)))
+neochumby: opening classic
+neochumby-classic-service: classic in front
+manifest /tmp/classic: 15 pages, 105 screens, 169 files, 21871 KB (0 KB kept in memory)
+neochumby: the top button: told classic
+chumby: back to the Chumby
+neochumby: classic asks: chumby-mode
+neochumby: CHUMBY MODE
+dev/emulate-classic: all passed
