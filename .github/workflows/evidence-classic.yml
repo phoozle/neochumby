@@ -1,0 +1,67 @@
+# Evidence for johnmerchant/neochumby#11 (branch-only, never merged): the
+# PR's tree under dev/emulate-classic, with pictures from
+# phoozle/neochumby-classic's offline smoke render (made-up data,
+# placeholder artwork), as #28's CI step makes them. The screenshots and the
+# session's log are uploaded as an artifact.
+name: Evidence, classic under dev/emulate
+
+on:
+  push:
+    branches: [evidence/classic-emulate]
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: 0.17.0
+
+jobs:
+  emulate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv5te-unknown-linux-musleabi
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: A tree with classic and Doom
+        run: tools/tree "$RUNNER_TEMP/tree" doom classic
+      - name: Pictures from the renderer's smoke render
+        env:
+          CLASSIC_REPO: https://github.com/phoozle/neochumby-classic
+          CLASSIC_REV: 9b56db1e049d8ea69e4eea5960b5be29338dda10
+        run: |
+          git clone -q "$CLASSIC_REPO" "$RUNNER_TEMP/nc"
+          git -C "$RUNNER_TEMP/nc" checkout -q "$CLASSIC_REV"
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q Pillow segno
+          "$RUNNER_TEMP/venv/bin/python" - "$RUNNER_TEMP/nc" "$RUNNER_TEMP/tree" "$RUNNER_TEMP/pictures" <<'PY'
+          import os, sys, tempfile
+          nc, tree, out = sys.argv[1:]
+          sys.path[:0] = [os.path.join(nc, "tests"), os.path.join(nc, "files", "python")]
+          work = tempfile.mkdtemp(prefix="classic-render-")
+          os.environ.update(NEOCHUMBY_CLASSIC_STATE=work, NEOCHUMBY_CLASSIC_ASSETS="", NEOCHUMBY_TREE=tree)
+          os.environ.pop("NEOCHUMBY_CLASSIC_CONFIG", None)
+          import smoke
+          smoke.renders(work, out, None)
+          PY
+      - name: dev/emulate-classic
+        timeout-minutes: 5
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools
+          sudo dev/emulate-classic "$RUNNER_TEMP/tree" "$RUNNER_TEMP/pictures" "$RUNNER_TEMP/classic" 2>&1 | tee "$RUNNER_TEMP/run.txt"
+      - name: Collect
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          sudo sh -c 'cp "$1"/*.png "$1"/log.txt "$2"/ 2>/dev/null; cp "$3" "$2"/' sh "$RUNNER_TEMP/classic" "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/run.txt"
+          sudo chown -R "$(id -u)" "$RUNNER_TEMP/evidence"
+          ls -la "$RUNNER_TEMP/evidence"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: classic-emulate
+          path: ${{ runner.temp }}/evidence
