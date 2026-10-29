@@ -1,0 +1,18 @@
+== pair through neochumby-home
+dev/emulate: running (/home/runner/work/_temp/airplay/state); the session's output: dev/emulate log
+paired chumby
+== paired: the stream opens the screen
+dev/emulate: running (/home/runner/work/_temp/airplay/state); the session's output: dev/emulate log
+== play/pause reaches the sender
+== next reaches the sender, and its track shows
+== the stream ends: ready for AirPlay
+-- the session's log:
+neochumby: opening home
+neochumby: service airplay started
+neochumby: service airplay replaces home
+neochumby-airplay: /usr/bin/chumby_set_volume: No such file or directory (os error 2)
+neochumby: opening airplay
+-- the sender's requests:
+playpause 424242
+nextitem 424242
+dev/emulate-airplay: all passed
