@@ -1,6 +1,0 @@
-neochumbyd: serving /home/runner/work/_temp/tree on 127.0.0.1:12049, the API on 127.0.0.1:17340; key c4f733850c63c3fb77d7e3d4f1d67f6d1153922eed73725ad164579e7d9237e9
-neochumbyd: chumby at 127.0.0.1 asks to pair: if it shows 241249, run `neochumbyd approve 241249`
-neochumbyd: chumby paired
-neochumbyd: airplay for chumby
-neochumby-airplay: receiver "Chumby" for chumby on port 7351
-neochumbyd: 127.0.0.1:49572: peer closed connection without sending TLS close_notify: https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof
