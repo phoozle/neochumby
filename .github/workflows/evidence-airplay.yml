@@ -1,0 +1,63 @@
+# Evidence for AirPlay's now-playing screen (branch-only, never merged): the
+# branch's ARM build and lint, then dev/emulate-airplay with its screenshots,
+# logs and the fake sender's requests uploaded as an artifact.
+name: Evidence, AirPlay's screen under dev/emulate
+
+on:
+  push:
+    branches: [evidence/airplay-now-playing]
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: 0.17.0
+
+jobs:
+  emulate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv5te-unknown-linux-musleabi, x86_64-unknown-linux-musl
+          components: clippy, rustfmt
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Host checks
+        run: |
+          cargo clippy -p neochumby-airplay --lib --bin neochumby-airplay-companion -- -D warnings
+          cargo clippy --all-targets -p neochumby-sys -- -D warnings
+          cargo test -p neochumby-airplay --lib --bin neochumby-airplay-companion
+          cargo test -p neochumby-sys
+      - name: The Chumby's binaries
+        run: |
+          cargo clippy --release --target armv5te-unknown-linux-musleabi -p neochumby -p neochumby-home -p neochumby-airplay -- -D warnings
+      - name: The server's binaries and a tree
+        run: |
+          cargo build --release --target x86_64-unknown-linux-musl -p neochumbyd
+          tools/tree "$RUNNER_TEMP/tree" airplay doom
+      - name: dev/emulate-airplay
+        timeout-minutes: 5
+        run: |
+          sudo apt-get update -q
+          # This fork's runner is Ubuntu 24.04, whose qemu-user-binfmt isn't
+          # static: qemu-user-static, as dev/emulate says for older releases.
+          sudo apt-get install -yq --no-install-recommends qemu-user-static dosfstools
+          set -o pipefail
+          sudo dev/emulate-airplay "$RUNNER_TEMP/tree" target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/airplay" 2>&1 | tee "$RUNNER_TEMP/run.txt"
+      - name: Collect
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          sudo sh -c 'cp "$1"/*.png "$1"/*.txt "$1"/neochumbyd.log "$2"/ 2>/dev/null; cp "$3" "$2"/' sh "$RUNNER_TEMP/airplay" "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/run.txt"
+          sudo chown -R "$(id -u)" "$RUNNER_TEMP/evidence"
+          ls -la "$RUNNER_TEMP/evidence"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: airplay-emulate
+          path: ${{ runner.temp }}/evidence
