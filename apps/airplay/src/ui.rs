@@ -131,7 +131,8 @@ fn colour(c: u16) -> Rgb565 {
 /// it copied. While a track plays, that's the progress bar and the times.
 pub fn present(c: &Canvas, shown: &mut [u16], screen: &mut [u16], full: bool) -> usize {
     let mut copied = 0;
-    for ((row, was), dst) in c.px.chunks_exact(W).zip(shown.chunks_exact_mut(W)).zip(screen.chunks_exact_mut(W)) {
+    let rows = c.px.as_chunks::<W>().0.iter();
+    for ((row, was), dst) in rows.zip(shown.as_chunks_mut::<W>().0).zip(screen.as_chunks_mut::<W>().0) {
         if full || row != was {
             dst.copy_from_slice(row);
             was.copy_from_slice(row);
