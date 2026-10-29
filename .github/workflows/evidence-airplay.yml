@@ -1,7 +1,7 @@
 # Evidence for AirPlay's now-playing screen (branch-only, never merged): the
 # branch's ARM build and lint, then dev/emulate-airplay with its screenshots,
 # logs and the fake sender's requests uploaded as an artifact.
-name: Evidence, AirPlay's screen under dev/emulate
+name: Evidence, nowplaying under dev/emulate
 
 on:
   push:
@@ -29,18 +29,20 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       - name: Host checks
         run: |
-          cargo clippy -p neochumby-airplay --lib --bin neochumby-airplay-companion -- -D warnings
+          cargo clippy -p neochumby-airplay --bin neochumby-airplay-companion -- -D warnings
+          cargo clippy -p neochumby-nowplaying --lib --bin neochumby-nowplaying-companion -- -D warnings
           cargo clippy --all-targets -p neochumby-sys -- -D warnings
-          cargo test -p neochumby-airplay --lib --bin neochumby-airplay-companion
+          cargo test -p neochumby-airplay --bin neochumby-airplay-companion
+          cargo test -p neochumby-nowplaying --lib --bin neochumby-nowplaying-companion
           cargo test -p neochumby-sys
       - name: The Chumby's binaries
         run: |
-          cargo clippy --release --target armv5te-unknown-linux-musleabi -p neochumby -p neochumby-home -p neochumby-airplay -- -D warnings
+          cargo clippy --release --target armv5te-unknown-linux-musleabi -p neochumby -p neochumby-home -p neochumby-airplay -p neochumby-nowplaying -- -D warnings
       - name: The server's binaries and a tree
         run: |
           cargo build --release --target x86_64-unknown-linux-musl -p neochumbyd
-          tools/tree "$RUNNER_TEMP/tree" airplay doom
-      - name: dev/emulate-airplay
+          tools/tree "$RUNNER_TEMP/tree" airplay nowplaying doom
+      - name: dev/emulate-nowplaying
         timeout-minutes: 5
         run: |
           sudo apt-get update -q
@@ -48,7 +50,7 @@ jobs:
           # static: qemu-user-static, as dev/emulate says for older releases.
           sudo apt-get install -yq --no-install-recommends qemu-user-static dosfstools
           set -o pipefail
-          sudo dev/emulate-airplay "$RUNNER_TEMP/tree" target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/airplay" 2>&1 | tee "$RUNNER_TEMP/run.txt"
+          sudo dev/emulate-nowplaying "$RUNNER_TEMP/tree" target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/airplay" 2>&1 | tee "$RUNNER_TEMP/run.txt"
       - name: Collect
         if: always()
         run: |
