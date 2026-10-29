@@ -1610,6 +1610,9 @@ dependencies = [
 name = "neochumby-airplay"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "embedded-graphics",
+ "image",
  "neochumby",
  "neochumby-proto",
  "neochumby-sys",
@@ -1738,18 +1741,6 @@ name = "neochumby-ncurses"
 version = "0.1.0"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "neochumby-nowplaying"
-version = "0.1.0"
-dependencies = [
- "base64",
- "embedded-graphics",
- "image",
- "neochumby",
- "neochumby-proto",
- "neochumby-sys",
 ]
 
 [[package]]

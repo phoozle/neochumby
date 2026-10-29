@@ -1,0 +1,66 @@
+#!/bin/sh
+# The end-to-end scenarios, all of them, on one of dev/emulate's backends,
+# with a summary to attach to a pull request (CONTRIBUTING.md, "Test on a
+# Chumby, or an emulated one, and show it"):
+#
+#   sudo dev/e2e TREE NEOCHUMBYD OUT
+#       user mode, as CI runs it (on a Mac, without sudo, in its Linux)
+#   NEOCHUMBY_EMU_MACHINE=chumby-classic dev/e2e TREE NEOCHUMBYD OUT
+#       the emulated Chumby on its stock firmware: your own, by
+#       NEOCHUMBY_EMU_KERNEL, _NAND and _PSP (emu/README.md); local only,
+#       never in CI (docs/legal.md)
+#   NEOCHUMBY_EMU_DEVICE=NAME dev/e2e TREE NEOCHUMBYD OUT
+#       a real Chumby, paired and set dev=on
+#
+# TREE from tools/tree, with doom and neochumby-sync; NEOCHUMBYD the x86_64
+# neochumbyd built with it; with airplay, dev/emulate-airplay too. NEOCHUMBY_CLASSIC_PICTURES (a renderer's output)
+# adds dev/emulate-classic. Each scenario's screenshots and logs go in
+# OUT/<scenario>/, its output in OUT/<scenario>.txt, and the results in
+# OUT/summary.txt. A scenario a backend can't run exits 77: skipped, not
+# failed. The exit status is 1 if any failed.
+set -u
+tree=${1:?usage: dev/e2e TREE NEOCHUMBYD OUT}
+neochumbyd=${2:?usage: dev/e2e TREE NEOCHUMBYD OUT}
+out=${3:?usage: dev/e2e TREE NEOCHUMBYD OUT}
+dev=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$out"
+summary=$out/summary.txt
+failed=0
+
+{
+  echo "neochumby $(git -C "$dev" rev-parse --short HEAD 2>/dev/null || echo '(no git)')," \
+    "on $("$dev/emulate" backend)"
+} > "$summary"
+
+run() {
+  name=$1
+  shift
+  echo "== $name"
+  start=$(date +%s)
+  "$@" > "$out/$name.txt" 2>&1
+  status=$?
+  took=$(($(date +%s) - start))
+  case $status in
+  0) result=ok ;;
+  77) result=skipped ;;
+  *)
+    result="FAILED ($status)"
+    failed=1
+    ;;
+  esac
+  tail -n 1 "$out/$name.txt"
+  echo "$name: $result (${took}s)" | tee -a "$summary"
+}
+
+run smoke "$dev/emulate-smoke" "$tree" "$out/smoke"
+run powercut "$dev/emulate-powercut" "$tree" "$neochumbyd" "$out/powercut"
+if [ -d "$tree/apps/airplay" ]; then
+  run airplay "$dev/emulate-airplay" "$tree" "$neochumbyd" "$out/airplay"
+fi
+if [ -n "${NEOCHUMBY_CLASSIC_PICTURES:-}" ]; then
+  run classic "$dev/emulate-classic" "$tree" "$NEOCHUMBY_CLASSIC_PICTURES" "$out/classic"
+fi
+
+echo "--"
+cat "$summary"
+exit "$failed"

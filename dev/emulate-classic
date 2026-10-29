@@ -19,6 +19,14 @@
 # its APPS screen lists TREE's apps): made-up data and placeholder artwork.
 # Where to tap comes from the manifest's tap zones.
 set -eu
+# The pictures reach classic through /tmp/classic (--bind): the
+# full-system machine can't be given them yet (it has no network for a
+# renderer), and a real Chumby shows its own renderer's, which these
+# comparisons can't know.
+if [ "$("$(dirname "$0")/emulate" backend)" != user ]; then
+  echo "dev/emulate-classic: skipped: user mode only (the pictures are known only there)"
+  exit 77
+fi
 tree=${1:?usage: dev/emulate-classic TREE PICTURES OUT}
 pictures=${2:?usage: dev/emulate-classic TREE PICTURES OUT}
 out=${3:?usage: dev/emulate-classic TREE PICTURES OUT}
@@ -69,9 +77,14 @@ screens=
 for s in home home_night apps_p0 apps_p0_night confirm confirm_night; do
   [ -f "$pictures/$s.raw" ] && screens="$screens $pictures/$s.raw"
 done
+# What changes on classic's own screens, left out of the comparisons: the
+# clock and the ticker, the animated icons, and Home's live panes.
+masks="--mask 160,14,160,30 --mask 0,216,320,24"
+masks="$masks $(awk '$1 == "sprite" { printf " --mask %d,%d,%d,%d", $7, $8, $4, $5 }
+  $1 == "pane" { printf " --mask %d,%d,%d,%d", $6, $7, $4, $5 }' "$pictures/manifest.txt")"
 # Waits for the screen to be one of these (the best match, by name).
 showing() {
-  emu compare --min "$2" --wait 60 --want "$1" $pages $screens || fail "the screen isn't $1"
+  emu compare --min "$2" --wait 60 --want "$1" $masks $pages $screens || fail "the screen isn't $1"
 }
 slideshow() { showing '^(?!home|apps_p|confirm)' 0.6; }
 

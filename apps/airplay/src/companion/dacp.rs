@@ -19,7 +19,7 @@ use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::process::Command;
 use std::time::Duration;
 
-use neochumby_nowplaying::frames::Control;
+use neochumby_airplay::frames::Control;
 
 /// How long connecting, sending and the answer may each take.
 const TIMEOUT: Duration = Duration::from_secs(2);

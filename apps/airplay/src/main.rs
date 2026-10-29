@@ -1,4 +1,5 @@
-//! AirPlay's Chumby half (the companion, companion.rs, is neochumbyd's).
+//! AirPlay's Chumby half: the service (the companion, companion/, is
+//! neochumbyd's; the now-playing screen is screen.rs).
 //!
 //! AirPlay on the Chumby's speaker, as a background service: it opens this
 //! app's companion on the paired neochumbyd, which runs an AirPlay receiver
@@ -10,30 +11,34 @@
 //! the speaker is someone else's is dropped, the connection kept, and the
 //! stream plays again once the speaker is free.
 //!
-//! The companion's metadata frames ([2], shairport-sync's metadata pipe,
-//! unparsed) go to whatever connects to the abstract Unix socket [`FEED`]:
-//! a now-playing app (apps/nowplaying), since only this service may hold
-//! the companion. Nothing is read back, and a reader too slow to keep up is
-//! dropped.
+//! It is the only one to open the companion (a second connection would
+//! start a second receiver), so it is also the now-playing screen's way to
+//! it: what the companion says about the track (neochumby_airplay::frames)
+//! goes on to the screen over the app's service socket (neochumby::service),
+//! and the screen's buttons come back the same way and go on to the
+//! companion. A screen that connects is told everything at once
+//! (neochumby_airplay::hub). When a stream begins from stopped, it asks the
+//! session to open the screen, which the session allows over the start app
+//! only.
+//!
+//! As a player app (#54), it takes the session's `pause` and `resume`: the
+//! sender is asked to pause or play, and the audio is dropped meanwhile in
+//! case it can't be.
 //!
 //! The session opens the companion for it (neochumby::companion); it opens
-//! it again, backing off, whenever the companion goes.
+//! it again, backing off, whenever the companion goes. The screens are
+//! looked after meanwhile.
 
 use std::io::{self, Write};
-use std::os::linux::net::SocketAddrExt;
-use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
+use std::os::unix::net::UnixListener;
 use std::time::{Duration, Instant};
 
 use neochumby::audio::{self, Speaker};
 use neochumby::companion::{self, Link};
-
-// The companion's frames.
-const AUDIO: u8 = 0;
-const END: u8 = 1;
-const META: u8 = 2;
-
-/// Where the metadata goes.
-pub const FEED: &str = "neochumby-airplay-meta";
+use neochumby::service::{self, Peer};
+use neochumby::session::{Notice, Pipe, Request};
+use neochumby_airplay::frames::{AUDIO, Control, END, Frame};
+use neochumby_airplay::hub::Hub;
 
 /// The master volume while AirPlay plays. The phone's volume is applied to
 /// the audio itself (by shairport-sync), so this only has to be loud enough
@@ -50,31 +55,119 @@ fn open_speaker() -> io::Result<Speaker> {
 const ASKED_RETRY: Duration = Duration::from_millis(250);
 /// /dev/dsp busy with a program outside the handover: when to try again.
 const BUSY_RETRY: Duration = Duration::from_secs(2);
+/// The longest the companion's connection is waited on before the screens
+/// are looked at again.
+const TICK: Duration = Duration::from_millis(50);
 
-/// The readers of the metadata.
-struct Feed {
+/// The now-playing screens connected to this service: one, usually, or
+/// none.
+struct Screens {
     listener: Option<UnixListener>,
-    readers: Vec<UnixStream>,
+    peers: Vec<Peer>,
 }
 
-impl Feed {
-    fn new() -> Feed {
-        let l = SocketAddr::from_abstract_name(FEED).and_then(|a| UnixListener::bind_addr(&a));
-        let l = l.and_then(|l| l.set_nonblocking(true).map(|()| l));
-        Feed { listener: l.inspect_err(|e| eprintln!("neochumby-airplay: {FEED}: {e}")).ok(), readers: Vec::new() }
+impl Screens {
+    fn new() -> Screens {
+        let listener = service::listen(neochumby::service!())
+            .inspect_err(|e| eprintln!("neochumby-airplay: the screen's socket: {e}; playing without it"))
+            .ok();
+        Screens { listener, peers: Vec::new() }
     }
 
-    fn send(&mut self, frame: &[u8]) {
-        while let Some(Ok((r, _))) = self.listener.as_ref().map(UnixListener::accept) {
-            if r.set_nonblocking(false).and_then(|()| r.set_write_timeout(Some(Duration::from_millis(500)))).is_ok() {
-                self.readers.push(r);
+    /// Takes in screens that have connected, telling each everything, and
+    /// returns the frames the screens have sent. Never waits, but on a
+    /// screen slow to take what it's sent.
+    fn poll(&mut self, hub: &Hub) -> Vec<Vec<u8>> {
+        if let Some(l) = &self.listener {
+            // A few at a time: an error that persists can't hold the loop.
+            for _ in 0..4 {
+                match service::accept(l) {
+                    Ok(Some(mut p)) => {
+                        if hub.replay().iter().all(|f| p.send(f).is_ok()) {
+                            self.peers.push(p);
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => eprintln!("neochumby-airplay: a screen: {e}"),
+                }
             }
         }
-        self.readers.retain_mut(|r| neochumby_proto::frame::write(r, frame).is_ok());
+        let mut got = Vec::new();
+        self.peers.retain_mut(|p| p.recv().map(|f| got.extend(f)).is_ok());
+        got
+    }
+
+    /// Sends `f` to every screen, dropping any that can't take it.
+    fn send(&mut self, f: &[u8]) {
+        self.peers.retain_mut(|p| p.send(f).is_ok());
     }
 }
 
-fn play(mut link: Link, feed: &mut Feed) -> io::Result<()> {
+/// The session's request pipe: for opening the screen when a stream
+/// begins, the app it says is in front, and, as a player app, `pause` and
+/// `resume` (the start app's MUTE, relayed by the session; #54).
+struct Front {
+    pipe: Option<Pipe>,
+    app: Option<String>,
+    /// Paused by the session: the audio is dropped until `resume`, whether
+    /// or not the sender takes remote control.
+    held: bool,
+    /// `pause` and `resume` as commands for the sender, not yet sent.
+    asked: Vec<Control>,
+}
+
+impl Front {
+    fn listen(&mut self) {
+        let Some(p) = self.pipe.as_mut() else { return };
+        for line in p.receive().lines {
+            // `pause` and `resume` are read as lines, which a session
+            // without player apps never sends (its Notice doesn't have them
+            // yet).
+            match line.as_str() {
+                "pause" => {
+                    self.held = true;
+                    self.asked.push(Control::Pause);
+                }
+                "resume" => {
+                    self.held = false;
+                    self.asked.push(Control::Play);
+                }
+                _ => {
+                    if let Some(Notice::Front(app)) = Notice::parse(&line) {
+                        self.app = Some(app);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Asks for this app's screen in front, unless it's there already. The
+    /// session decides: over the start app, yes; over anything else, no.
+    fn open_screen(&mut self) {
+        let me = neochumby::companion!().app();
+        self.listen();
+        if self.app.as_deref() == Some(me) {
+            return;
+        }
+        if let Some(p) = self.pipe.as_mut()
+            && !p.try_send(&Request::Open(me.into()).line())
+        {
+            eprintln!("neochumby-airplay: couldn't ask the session for the screen");
+        }
+    }
+}
+
+/// The screens' buttons, on to the companion: only CONTROL frames.
+fn controls(frames: Vec<Vec<u8>>, s: &mut Link) -> io::Result<()> {
+    for f in frames {
+        if let Some(Frame::Control(_)) = Frame::parse(&f) {
+            s.send(&f)?;
+        }
+    }
+    Ok(())
+}
+
+fn play(mut s: Link, screens: &mut Screens, hub: &mut Hub, front: &mut Front) -> io::Result<()> {
     let mut speaker: Option<Speaker> = None;
     // While the speaker is someone else's: when to try it again.
     let mut busy_until: Option<Instant> = None;
@@ -82,10 +175,21 @@ fn play(mut link: Link, feed: &mut Feed) -> io::Result<()> {
     // only once the speaker is free, rather than asking for it.
     let mut yielded = false;
     loop {
-        let Some(frame) = link.recv()? else {
-            return Err(io::Error::other("the companion has gone"));
-        };
+        let got = screens.poll(hub);
+        controls(got, &mut s)?;
+        front.listen();
+        for c in std::mem::take(&mut front.asked) {
+            s.send(&Frame::Control(c).encode())?;
+        }
+        // Fails once the companion has gone.
+        let Some(frame) = s.recv_timeout(TICK)? else { continue };
         match frame.split_first() {
+            Some((&AUDIO, _)) if front.held => {
+                // Paused by the session: silent, and the speaker free.
+                if speaker.take().is_some() {
+                    audio::withdraw();
+                }
+            }
             Some((&AUDIO, pcm)) => {
                 if speaker.as_ref().is_some_and(Speaker::yield_requested) {
                     eprintln!("neochumby-airplay: yielding the speaker to a newer player");
@@ -120,28 +224,45 @@ fn play(mut link: Link, feed: &mut Feed) -> io::Result<()> {
                     speaker = None;
                 }
             }
-            Some((&META, _)) => feed.send(&frame),
             Some((&END, _)) => {
                 speaker = None;
                 busy_until = None;
                 yielded = false;
                 audio::withdraw();
             }
-            _ => {}
+            // What the companion says about the track: kept, and passed on.
+            Some(_) => {
+                let u = hub.update(&frame);
+                if u.forward {
+                    screens.send(&frame);
+                }
+                if u.started {
+                    front.open_screen();
+                }
+            }
+            None => {}
         }
     }
 }
 
 fn main() {
     neochumby::debug::install("neochumby-airplay");
-    let mut feed = Feed::new();
+    let mut screens = Screens::new();
+    let mut hub = Hub::default();
+    let mut front = Front { pipe: Pipe::from_env(), app: None, held: false, asked: Vec::new() };
     let mut backoff = 2;
     loop {
         let started = Instant::now();
-        let r = companion::open(neochumby::companion!()).and_then(|l| play(l, &mut feed));
+        let r = companion::open(neochumby::companion!()).and_then(|s| {
+            screens.send(&hub.link(true));
+            play(s, &mut screens, &mut hub, &mut front)
+        });
         // The stream has gone with the connection: so has any wish for the
-        // speaker.
+        // speaker, and what the screen showed.
         audio::withdraw();
+        if hub.linked() {
+            screens.send(&hub.link(false));
+        }
         if let Err(e) = r {
             eprintln!("neochumby-airplay: {e}");
         }
@@ -149,7 +270,15 @@ fn main() {
         if started.elapsed() > Duration::from_secs(60) {
             backoff = 2;
         }
-        neochumby::sleep_ms(backoff * 1000);
+        // The wait, with the screens looked after: they're told there's no
+        // companion, and their buttons have nowhere to go.
+        let until = Instant::now() + Duration::from_secs(backoff);
+        while Instant::now() < until {
+            screens.poll(&hub);
+            front.listen();
+            front.asked.clear();
+            neochumby::sleep_ms(100);
+        }
         backoff = (backoff * 2).min(60);
     }
 }

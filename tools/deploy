@@ -6,13 +6,15 @@
 # them all at the end; a Chumby running a replaced binary is told its file
 # went stale, so stop what it runs first, or restart it: with --restart,
 # each Chumby NAMEd is asked over ssh (`neochumbyd restart NAME` on HOST) to
-# end its apps and start its session again from the new tree.
+# end its apps and start its session again from the new tree. With --tree
+# DIR, a tree tools/tree already built is installed instead (dev/emulate
+# --device does this).
 #
-#   tools/deploy HOST [APP ...] [--restart NAME ...]
+#   tools/deploy HOST [APP ...] [--tree DIR] [--restart NAME ...]
 #                                  NEOCHUMBYD_DIR: default /var/lib/neochumbyd
 #                                  (zig on PATH)
 set -eu
-usage="usage: tools/deploy HOST [APP ...] [--restart NAME ...]"
+usage="usage: tools/deploy HOST [APP ...] [--tree DIR] [--restart NAME ...]"
 host=${1:?$usage}
 shift
 dir=${NEOCHUMBYD_DIR:-/var/lib/neochumbyd}
@@ -20,12 +22,17 @@ dir=${NEOCHUMBYD_DIR:-/var/lib/neochumbyd}
 # The APPs stay in "$@"; the NAMEs after --restart are collected apart.
 names=
 restart=
+built=
 n=$#
 while [ "$n" -gt 0 ]; do
   a=$1
   shift
   n=$((n - 1))
-  if [ "$a" = --restart ]; then
+  if [ "$a" = --tree ] && [ "$n" -gt 0 ]; then
+    built=$(cd "$1" && pwd)
+    shift
+    n=$((n - 1))
+  elif [ "$a" = --restart ]; then
     restart=1
   elif [ -n "$restart" ]; then
     case $a in
@@ -42,7 +49,11 @@ cd "$root"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-tools/tree "$tmp/tree" "$@"
+if [ -n "$built" ]; then
+  cp -R "$built" "$tmp/tree"
+else
+  tools/tree "$tmp/tree" "$@"
+fi
 cargo neochumbyd
 # Keeping its time: an unchanged binary is then not sent, nor the daemon
 # restarted.

@@ -1,30 +1,30 @@
-//! Now playing's screen, the app's `exec`: the track's title,
+//! AirPlay's now-playing screen, the app's `exec`: the track's title,
 //! artist, album and cover art, a progress bar, and previous, play/pause
 //! and next; or, with nothing playing, "Ready for AirPlay" and the name to
-//! choose on the phone (neochumby_nowplaying::ui draws it).
+//! choose on the phone (neochumby_airplay::ui draws it).
 //!
 //! It knows only what the service tells it, over the local socket
-//! (neochumby_nowplaying::link): the service has the companion. A button goes
+//! (neochumby::service): the service has the companion. A button goes
 //! back the same way, to the sender as a remote-control command; play/pause
 //! shows its effect at once, until the sender's own report a second or two
 //! later. Without the service (it starts with the session, and only on a
-//! paired Chumby) it says it's waiting, and tries again each second. It
-//! never opens itself: it's opened from the app list like any app.
+//! paired Chumby) it says it's waiting, and tries again each second.
 //!
 //! One loop, without threads (the Chumby's kernel lacks the futex calls
 //! std's would wait on): the socket and the touchscreen are read without
 //! waiting, and the screen is drawn when something changed, and each
-//! half-second while the progress moves. The top button and the corner
+//! half-second while the progress moves; only the rows that changed are
+//! copied to it. The top button and the corner
 //! hold are the session's, as for any app.
 
 use std::time::{Duration, Instant};
 
 use neochumby::fb::Fb;
 use neochumby::input::{Touch, Touchscreen};
-use neochumby_nowplaying::frames::{Control, Frame, Play};
-use neochumby_nowplaying::link::{self, Peer};
-use neochumby_nowplaying::nowplaying::NowPlaying;
-use neochumby_nowplaying::ui::{self, Canvas};
+use neochumby::service::{self, Peer};
+use neochumby_airplay::frames::{Control, Frame, Play};
+use neochumby_airplay::nowplaying::NowPlaying;
+use neochumby_airplay::ui::{self, Canvas};
 
 /// How often the loop runs.
 const TICK_MS: u32 = 30;
@@ -37,10 +37,13 @@ const ECHO: Duration = Duration::from_millis(350);
 const RETRY: Duration = Duration::from_secs(1);
 
 fn main() {
-    neochumby::debug::install("neochumby-nowplaying");
+    neochumby::debug::install("neochumby-airplay-screen");
     let mut fb = Fb::open().expect("/dev/fb0");
     let mut touch = Touchscreen::open();
     let mut canvas = Canvas::new();
+    // What the screen holds, so only the rows that change are copied.
+    let mut shown = vec![0u16; ui::W * ui::H];
+    let mut first = true;
     let mut np = NowPlaying::default();
     let clock = Instant::now();
     let now_ms = || clock.elapsed().as_millis() as u64;
@@ -53,7 +56,7 @@ fn main() {
     let mut dirty = true;
     loop {
         if service.is_none() && Instant::now() >= retry_at {
-            match link::connect(link::NAME) {
+            match service::connect(neochumby::service!()) {
                 Ok(p) => service = Some(p),
                 Err(_) => retry_at = Instant::now() + RETRY,
             }
@@ -66,7 +69,7 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    eprintln!("neochumby-nowplaying: the service: {e}");
+                    eprintln!("neochumby-airplay-screen: the service: {e}");
                     service = None;
                     retry_at = Instant::now() + RETRY;
                     dirty |= np.apply(Frame::Link(false), now_ms());
@@ -94,7 +97,7 @@ fn main() {
                     match sent {
                         Some(Ok(())) => np.pressed(c, now_ms()),
                         Some(Err(e)) => {
-                            eprintln!("neochumby-nowplaying: the service: {e}");
+                            eprintln!("neochumby-airplay-screen: the service: {e}");
                             service = None;
                         }
                         None => {}
@@ -106,7 +109,8 @@ fn main() {
         let moving = np.state.play == Play::Playing && !np.idle();
         if dirty || (moving && drawn.is_none_or(|t| t.elapsed() >= PROGRESS)) {
             ui::draw(&mut canvas, &np, now_ms(), pressed);
-            fb.pixels().copy_from_slice(canvas.pixels());
+            ui::present(&canvas, &mut shown, fb.pixels(), first);
+            first = false;
             drawn = Some(Instant::now());
             dirty = false;
         }

@@ -1,6 +1,5 @@
-//! What's playing, from shairport-sync's metadata (handed on by the
-//! airplay app): the frames to send the Chumby as each item comes
-//! (crate::frames).
+//! What's playing, from shairport-sync's metadata and the audio itself:
+//! the frames to send the Chumby as each item comes (crate::frames).
 //!
 //! - **The track:** the sender sends its details in a bundle between
 //!   `mdst` and `mden`: `minm` (title), `asar` (artist), `asal` (album),
@@ -13,12 +12,13 @@
 //!   start, now and its end, so the time gone and the length.
 //! - **Playing or not:** `pbeg` begins a stream, `pend` ends it; `pfls`
 //!   (a flush: a pause, or a seek) and `paus` pause; `prsm` and `pres`
-//!   resume.
+//!   resume. Audio flowing again plays, and a second without it pauses,
+//!   so a shairport-sync built without metadata still has a state.
 //! - **Remote control:** `clip`, `daid`, `acre` and `dapo` (dacp.rs).
 
 use std::time::{Duration, Instant};
 
-use neochumby_nowplaying::frames::{COVER_SIDE, Cover, Frame, Play, State, Track};
+use neochumby_airplay::frames::{COVER_SIDE, Cover, Frame, Play, State, Track};
 
 use crate::art;
 use crate::dacp::Remote;
@@ -87,6 +87,17 @@ impl Tracker {
         true
     }
 
+    /// Audio started flowing again, or stopped for a second.
+    pub fn audio(&mut self, flowing: bool, now: Instant) -> Vec<Frame> {
+        let changed = match (flowing, self.play) {
+            (true, Play::Playing) => false,
+            (true, _) => self.set_play(Play::Playing, now),
+            (false, Play::Playing) => self.set_play(Play::Paused, now),
+            (false, _) => false,
+        };
+        if changed { vec![self.state(now)] } else { vec![] }
+    }
+
     /// The sender's DACP port, looked up for its DACP-ID `id`.
     pub fn found_port(&mut self, id: &str, port: u16) {
         if self.remote.id == id {
@@ -146,7 +157,7 @@ impl Tracker {
                 let cover = art::thumbnail(&i.data, COVER_SIDE).unwrap_or_default();
                 if cover.width == 0 && !i.data.is_empty() {
                     eprintln!(
-                        "neochumby-nowplaying companion: cover art that isn't a JPEG or PNG ({} bytes)",
+                        "neochumby-airplay companion: cover art that isn't a JPEG or PNG ({} bytes)",
                         i.data.len()
                     );
                 }
@@ -289,6 +300,23 @@ mod tests {
         assert_eq!(t.remote.port, Some(5000));
         t.item(&item(b"ssnc", b"daid", b"CD"), now);
         assert_eq!(t.remote.port, None, "a new sender");
+    }
+
+    #[test]
+    fn audio_alone_plays_and_pauses() {
+        let now = Instant::now();
+        let mut t = Tracker::new(now);
+        assert_eq!(states(&t.audio(true, now))[0].play, Play::Playing);
+        assert!(t.audio(true, now).is_empty());
+        let later = now + Duration::from_secs(5);
+        assert_eq!(
+            states(&t.audio(false, later)),
+            [State { play: Play::Paused, elapsed_ms: 5_000, ..State::default() }]
+        );
+        assert!(t.audio(false, later).is_empty());
+        // Stopped stays stopped when the audio goes.
+        t.item(&item(b"ssnc", b"pend", b""), later);
+        assert!(t.audio(false, later).is_empty());
     }
 
     fn png(w: u32, h: u32) -> Vec<u8> {

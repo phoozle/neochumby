@@ -1,0 +1,44 @@
+# dev/emulate's Linux VM on a Mac, for Lima (https://lima-vm.io): user mode
+# needs Linux (namespaces, FUSE, binfmt_misc), so on a Mac every dev/emulate
+# command runs in here. `dev/emulate vm start` creates it from this file,
+# with REPO replaced by this checkout, which is mounted writable at the same
+# path so paths mean the same on both sides.
+vmType: vz
+mountType: virtiofs
+images:
+  - location: https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img
+    arch: aarch64
+  - location: https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img
+    arch: x86_64
+cpus: 2
+memory: 2GiB
+disk: 8GiB
+mounts:
+  - location: REPO
+    writable: true
+# Nothing to forward: the emulator is driven through dev/emulate.
+portForwards: []
+# No containerd or nerdctl: nothing here runs containers.
+containerd:
+  system: false
+  user: false
+provision:
+  - mode: system
+    script: |
+      #!/bin/sh
+      set -eu
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -q
+      # qemu-arm, static, registered with binfmt_misc's F flag; the package
+      # is qemu-user-binfmt from Ubuntu 25.04 on.
+      apt-get install -yq --no-install-recommends python3 dosfstools fuse3
+      apt-get install -yq --no-install-recommends qemu-user-static ||
+        apt-get install -yq --no-install-recommends qemu-user-binfmt
+      # On arm64 (a Mac with Apple silicon) the packages leave ARM out, as
+      # some arm64 CPUs run it natively; a Mac's can't. As dev/emulate's
+      # QEMU_ARM.
+      if [ ! -e /proc/sys/fs/binfmt_misc/qemu-arm ]; then
+        printf '%s\n' ':qemu-arm:M::\x7f\x45\x4c\x46\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/libexec/qemu-binfmt/arm-binfmt-P:POCF' \
+          > /etc/binfmt.d/qemu-arm.conf
+        systemctl restart systemd-binfmt
+      fi

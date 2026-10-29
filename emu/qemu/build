@@ -1,0 +1,17 @@
+#!/bin/sh
+# build: builds qemu-system-arm with the chumby-classic machine from
+# qemu-chumby (the submodule beside this script, at the commit this
+# repository pins), into emu/qemu/out/obj/qemu-system-arm.
+#
+# qemu-chumby's own build script fetches the QEMU release it pins, checks
+# the tarball's SHA-256 and applies the patches.
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+src=$here/qemu-chumby
+
+if [ ! -x "$src/build" ]; then
+    git -C "$here" submodule update --init qemu-chumby
+fi
+
+exec "$src/build" "$here/out"

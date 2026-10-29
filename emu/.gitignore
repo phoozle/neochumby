@@ -1,0 +1,13 @@
+/target
+# Firmware images, NAND dumps and settings partitions never go in git.
+*.img
+*.bin
+*.nanddump
+*.jffs2
+*.tar
+zImage*
+psp*/
+MD5SUMS*
+# QEMU: its build and sockets.
+/qemu/out/
+*.sock

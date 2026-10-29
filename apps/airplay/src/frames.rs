@@ -1,16 +1,11 @@
-//! Now playing's frames: what its companion sends the Chumby, what the
-//! Chumby sends back, and what the service and the screen say to each
-//! other. Each frame's first byte is its type; the rest is its body.
+//! AirPlay's frames: what the companion sends the Chumby, what the Chumby
+//! sends back, and what the service and the screen say to each other. Each
+//! frame's first byte is its type; the rest is its body.
 //!
-//! From the service to the companion:
+//! From the companion (neochumby_proto::frame, as Msg::Data):
 //!
-//!   [2] META + bytes     AirPlay's metadata, as the airplay app's service
-//!                        hands it on (shairport-sync's metadata pipe,
-//!                        unparsed; the companion parses it)
-//!   [8] CONTROL          below
-//!
-//! From the companion (neochumby_proto::frame):
-//!
+//!   [0] AUDIO + PCM      S16LE stereo at 44.1 kHz, as it comes
+//!   [1] END              the audio has stopped for now: the speaker can go
 //!   [2] NAME + UTF-8     the receiver's name, as phones list it
 //!   [3] TRACK            title, artist, album and the sender's name, each
 //!                        a u8 length and that many bytes of UTF-8
@@ -30,17 +25,14 @@
 //!
 //! From the screen to the service, and on to the companion:
 //!
-//!   [8] CONTROL + u8     1 play/pause, 2 next, 3 previous; 4 pause and
-//!                        5 play (unused yet: for a session's MUTE, should
-//!                        the app become a music app)
+//!   [8] CONTROL + u8     1 play/pause, 2 next, 3 previous; and from the
+//!                        service alone, 4 pause and 5 play (the session's
+//!                        `pause` and `resume`, for a player app)
 //!
 //! A frame this end doesn't know is ignored, so types can be added.
 
-use std::io;
-
-use neochumby_proto::frame::MAX_FRAME;
-
-pub const META: u8 = 2;
+pub const AUDIO: u8 = 0;
+pub const END: u8 = 1;
 pub const NAME: u8 = 2;
 pub const TRACK: u8 = 3;
 pub const COVER: u8 = 4;
@@ -217,39 +209,10 @@ impl Frame {
     }
 }
 
-/// Frames out of a byte stream that arrives in pieces (a socket read
-/// without waiting): neochumby_proto::frame's u32 big-endian length, then
-/// the frame.
-#[derive(Default)]
-pub struct Reader {
-    buf: Vec<u8>,
-}
-
-impl Reader {
-    pub fn push(&mut self, data: &[u8]) {
-        self.buf.extend_from_slice(data);
-    }
-
-    /// The next whole frame, if one has arrived; an error for a length
-    /// over MAX_FRAME, after which the stream is no use.
-    pub fn frame(&mut self) -> io::Result<Option<Vec<u8>>> {
-        let Some(len) = self.buf.first_chunk::<4>() else { return Ok(None) };
-        let n = u32::from_be_bytes(*len) as usize;
-        if n > MAX_FRAME {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "frame too long"));
-        }
-        if self.buf.len() < 4 + n {
-            return Ok(None);
-        }
-        let f = self.buf[4..4 + n].to_vec();
-        self.buf.drain(..4 + n);
-        Ok(Some(f))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use neochumby_proto::frame::MAX_FRAME;
 
     #[test]
     fn frames_go_and_come_back() {
@@ -284,7 +247,7 @@ mod tests {
     #[test]
     fn what_does_not_add_up_is_ignored() {
         assert_eq!(Frame::parse(&[]), None);
-        assert_eq!(Frame::parse(&[0, 1, 2]), None);
+        assert_eq!(Frame::parse(&[AUDIO, 1, 2]), None);
         assert_eq!(Frame::parse(&[99]), None);
         assert_eq!(Frame::parse(&[TRACK, 5, b'a']), None);
         assert_eq!(Frame::parse(&[STATE, 1, 0, 0]), None);
@@ -301,25 +264,5 @@ mod tests {
         let side = COVER_SIDE as usize;
         let f = Frame::Cover(Cover { width: COVER_SIDE, height: COVER_SIDE, pixels: vec![0; side * side] }).encode();
         assert!(f.len() <= MAX_FRAME);
-    }
-
-    #[test]
-    fn the_reader_takes_frames_in_pieces() {
-        let mut stream = Vec::new();
-        neochumby_proto::frame::write(&mut stream, &Frame::Name("A".into()).encode()).unwrap();
-        neochumby_proto::frame::write(&mut stream, &Frame::Link(false).encode()).unwrap();
-        let mut r = Reader::default();
-        let mut got = Vec::new();
-        for b in &stream {
-            r.push(std::slice::from_ref(b));
-            while let Some(f) = r.frame().unwrap() {
-                got.push(Frame::parse(&f).unwrap());
-            }
-        }
-        assert_eq!(got, [Frame::Name("A".into()), Frame::Link(false)]);
-
-        let mut r = Reader::default();
-        r.push(&(MAX_FRAME as u32 + 1).to_be_bytes());
-        assert!(r.frame().is_err());
     }
 }

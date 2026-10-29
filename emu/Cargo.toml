@@ -1,0 +1,23 @@
+[package]
+name = "chumby-emu"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Builds the NAND and settings images the Chumby Classic emulator boots"
+
+# A host tool, built apart from the neochumby workspace (which targets the
+# Chumby itself).
+[workspace]
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+debug = "line-tables-only"
+panic = "abort"
+codegen-units = 1
+lto = "thin"
+
+[profile.dev]
+opt-level = 1

@@ -133,7 +133,7 @@ request's tree with it (`dev/emulate-smoke`).
 
 It needs Linux, root, Python 3.9+, FUSE, util-linux's `mount` with loop
 devices, qemu-user's binfmt handler (static), and dosfstools for stick
-images. On a Mac, run it in a Linux VM.
+images. On a Mac, it runs itself in Linux that shares the checkout (below).
 
 ```sh
 sudo apt install qemu-user-binfmt dosfstools    # Debian, Ubuntu (older: qemu-user-static)
@@ -168,6 +168,75 @@ that would let it out of the fake root or into the PC's settings: no
 mounts, chroot, modules, raw devices or network setup, and `/proc/sys` is
 read-only.
 
+### On a Mac
+
+`dev/emulate` needs Linux, so on a Mac it runs itself in Linux that shares
+this checkout at the same path. Every command, run from inside the checkout
+with paths inside it, goes there and runs as root there, so no sudo.
+
+One of:
+- **Apple's `container`** (macOS 26 or later, Apple silicon): install it
+  from github.com/apple/container and run `container system start`. It is
+  used if installed. Its kernel has no vfat, so stick images (`mkstick`,
+  `start --stick IMG`, the sync scenario) need Lima.
+- **Lima**: `brew install lima`. Set `NEOCHUMBY_EMU_VM=lima` to use it when
+  `container` is installed too.
+
+```sh
+tools/tree target/emu-tree doom
+dev/emulate vm start                 # once per boot; the first one builds the image or VM
+dev/emulate-smoke target/emu-tree target/emu-smoke    # the smoke scenario
+dev/emulate start target/emu-tree    # or by hand, as on Linux, without sudo
+dev/emulate shot home.png
+dev/emulate stop
+dev/emulate vm exec CMD ...          # anything else, as root, in that Linux
+```
+
+The emulator's directory stays inside that Linux (`/var/tmp`): a folder
+shared from the Mac can't hold its control socket, so don't give `--state` a
+path in the checkout.
+
+If the first `vm start` with `container` can't resolve names (apt-get exits
+100), build the image with a DNS server named, then start again:
+
+```sh
+container build --dns 1.1.1.1 -t neochumby-emulate -f dev/Containerfile dev
+dev/emulate vm start
+```
+
+To clean up: `dev/emulate vm stop` (it starts again with `vm start`), or
+`dev/emulate vm delete` to remove the container or VM. With `container`, the
+image stays (`container image rm neochumby-emulate`, about 100 MB). With
+Lima, its downloaded Ubuntu image stays in Lima's cache (`limactl prune`).
+
+### Testing the developer link in dev/emulate
+
+A neochumbyd beside the emulator pairs with it and drives it as it would a
+real Chumby (its name is `chumby`). The touchscreen and button are
+dev/emulate's fakes, so this tests the protocol and the session, not the
+Chumby's drivers. On Linux, run `$B` as root; on a Mac, put `dev/emulate vm
+exec` before each `$B`.
+
+```sh
+tools/tree target/emu-tree doom && cargo neochumbyd
+B=target/x86_64-unknown-linux-musl/release/neochumbyd
+N="--state /var/tmp/nd"
+$B serve $N --tree target/emu-tree --api 127.0.0.1:7340 --nfs 127.0.0.1:2049   # in another terminal
+dev/emulate start --server 127.0.0.1 target/emu-tree
+dev/emulate tap 80 220                 # PAIR
+$B pairing $N                          # the code on the screen
+$B approve CODE $N                     # the screen says PAIRED
+dev/emulate stop
+dev/emulate start --server 127.0.0.1 target/emu-tree   # neochumbyd: chumby connected
+$B set chumby dev=on $N
+$B tap chumby 160 62 $N                # DOOM: "home asks: open doom"
+$B tap chumby 5 5 --hold 3500 $N       # the corner hold: "escape", home again
+$B button chumby tap $N                # "the top button: told home"
+$B shot chumby nd.png $N && dev/emulate shot emu.png  # the same pixels
+$B set chumby dev= $N                  # tap and button refused again
+dev/emulate stop
+```
+
 ### Scenarios
 
 **neochumby-classic** (`dev/emulate-classic TREE PICTURES OUT`; CI runs it
@@ -186,16 +255,29 @@ artwork. The script checks that:
 
 Where it taps comes from the pictures' own tap zones.
 
-**Now playing** (`dev/emulate-nowplaying TREE NEOCHUMBYD OUT`; CI runs
-it). A neochumbyd on the PC runs the airplay and nowplaying apps'
-companions, with `dev/fake-shairport` in shairport-sync's place: made-up
-metadata, a generated cover, silence, and a sender's remote-control server.
-The emulated Chumby pairs through neochumby-home's PAIR, and the script
-checks that:
-- nowplaying's service reads the airplay app's metadata, and NOW PLAYING,
-  opened from the home screen, is ready for AirPlay;
-- when the fake phone plays, the screen shows the track, with the cover in
-  its box;
+**A power cut during a sync round** (`dev/emulate-powercut TREE NEOCHUMBYD
+OUT`, run by CI). The emulated Chumby pairs with a neochumbyd on the PC
+through neochumby-home's PAIR, syncs its tree to a FAT stick image
+(`delivery=sync`), then boots through the real boot hook (`start --boot`,
+under a static busybox) while a second round writes the other set. `sudo
+dev/emulate powercut OUT.img` then cuts the power: the session is frozen
+where it is, the stick image copied as it stands (whatever the PC's kernel
+hadn't written to it is lost), and everything killed. Booting that copy,
+the log must show the hook running a complete set, `check-set` agreeing,
+and the next round making the new set live, which one more boot runs. A
+cut that came too late is tried again, sooner. With `--device` the person
+beside the Chumby is asked to pull the plug; the full-system machine skips
+it until qemu-chumby has USB. (Every cut point of a round, on the host, is
+neochumby-sync's own crash test.)
+
+**AirPlay's now-playing screen** (`dev/emulate-airplay TREE NEOCHUMBYD
+OUT`, run by CI through `dev/e2e`; user mode only). A neochumbyd on the PC
+runs the airplay app's companion with `dev/fake-shairport` in
+shairport-sync's place: made-up metadata, a generated cover, silence, and a
+sender's remote-control server. The emulated Chumby pairs through
+neochumby-home's PAIR, and the script checks that:
+- the stream beginning opens the screen over the home screen, with the
+  cover in its box;
 - play/pause and next on the screen reach the sender as DACP requests,
   with its Active-Remote token, and the screen shows their effect;
 - the stream ending leaves the screen ready for AirPlay.
@@ -238,9 +320,51 @@ set and flip `current`. A power cut mid-round can be approximated by
 `dev/emulate stop` (SIGKILL) during a large file. That shows the journal
 and resume logic, not FAT's behaviour.
 
-`dev/emulate --help` lists the fake devices and what each does. What it
-can't catch is what full-system emulation (the whole Chumby, its stock
-firmware included, still to come) and real devices are for:
+### The whole Chumby: --machine chumby-classic
+
+`--machine chumby-classic` (or `NEOCHUMBY_EMU_MACHINE=chumby-classic`)
+boots the stock 2.6.16 firmware on QEMU's chumby-classic machine
+(`emu/qemu/build`), with the tree in the NAND's Cache partition as a stick
+and a test boot hook in the settings. It needs no root and runs natively on
+a Mac. The firmware is your own device's (`--kernel`, `--nand`,
+`--factory-psp`, or `NEOCHUMBY_EMU_KERNEL`, `_NAND`, `_PSP`; see
+`emu/README.md`), and it stays on your machine: never in the repository,
+CI or an attachment (`docs/legal.md`). Without it, `start` and the
+scenarios exit 77, skipped.
+
+```sh
+export NEOCHUMBY_EMU_MACHINE=chumby-classic NEOCHUMBY_EMU_KERNEL=... NEOCHUMBY_EMU_NAND=... NEOCHUMBY_EMU_PSP=...
+dev/emulate-smoke /tmp/tree /tmp/smoke     # the same scenario, its user-mode steps skipped
+```
+
+Touches go over QMP (`input-send-event`), screenshots are `screendump`,
+and `log` is the console. The top button, `exec`, `selftest`, `--stick`
+and `--bind` are user mode's only, for now. `python3 dev/test_emulate.py`
+(run by CI) checks its images against `chumby-emu`'s and its control path
+against a stub QEMU.
+
+### A real Chumby: --device NAME
+
+The same scenarios run on a real Chumby, paired with a neochumbyd and set
+`dev=on` (`neochumbyd set NAME dev=on`, which allows remote input), over
+its developer link: `NEOCHUMBY_EMU_DEVICE=NAME dev/emulate-smoke /tmp/tree
+/tmp/smoke`, with `NEOCHUMBY_EMU_HOST=HOST` when neochumbyd runs elsewhere
+(over ssh; its state in `NEOCHUMBYD_DIR`). `start` installs the tree there
+(`tools/deploy --tree`) and restarts the Chumby; `log` is its log from then
+on; `shot`, `tap` and `button` are neochumbyd's (`neochumbyd tap` and
+`button`; an older neochumbyd without them skips those steps). A remote
+press goes where a real one would, so it can't reach an app that reads the
+switch itself (`button = true`, Doom's FIRE): a scenario needing that skips
+on a device. Steps that need hands, like pulling the power, are
+`dev/emulate prompt` lines, shown only with `--device`.
+
+So that one scenario holds on every backend, it asserts on lines the
+session and apps log on purpose, compares only our own screens (with what
+changes masked), scales its waits by `dev/emulate scale`, and exits 77,
+skipped, where a backend can't do a step.
+
+`dev/emulate --help` lists the fake devices and what each does. What user
+mode can't catch is what the full-system machine and real devices are for:
 
 - **The 2.6.16 kernel.** System calls go to the PC's kernel. Futex flags
   that kernel lacks, `nanosleep` failing with `EINVAL` on restart, and newer
@@ -487,6 +611,14 @@ volume.
 In Rust, a service reads its notices with `Pipe::receive`, which doesn't
 wait, and `Notice::parse`.
 
+**An exec talking to its own service.** `neochumby::service` gives the two
+a local socket, named after the app (`neochumby::service!()`, from its
+crate's name): the service `listen`s and `accept`s, the exec `connect`s,
+and frames go both ways without waiting. Each end refuses a peer running
+as another user. Another app could still bind the name first, which keeps
+the two apart, so don't let anything critical depend on it. AirPlay's
+screen and service are an example.
+
 **Companions.** An app with a server half ships it as a second binary,
 named by `companion`. neochumbyd runs it for each paired Chumby that opens
 the app:
@@ -528,3 +660,75 @@ which has `sed` but no `sha256sum`, `printf`, `od` or `head -c`. Anything
 it can't do goes in the session binary as a subcommand, like `neochumby
 check-set`. Raise its `neochumby-hook-version` line with every change: the
 session replaces the hook installed in `/psp` only with a higher version.
+
+### Test on a Chumby, or an emulated one, and show it
+
+CI builds and unit-tests everything, but it can't tell whether a change
+works on a Chumby. So a pull request that changes what runs on the Chumby
+(`crates/neochumby`, `crates/neochumby-sys`, `apps/`, `boot/`) is
+approved only once its description, or a comment, shows it running. There
+are three ways, from quickest to most faithful:
+
+1. **`dev/emulate`** (user mode, on Linux, or a Linux VM on a Mac): your
+   tree's binaries against fake devices, on the PC's kernel. `sudo dev/e2e
+   TREE NEOCHUMBYD OUT` runs every scenario, as CI does, or drive it by
+   hand with `start`, `tap`, `button`, `shot` and `log`. Enough for most
+   app and session changes.
+2. **The emulator** (`emu/`, QEMU with the Chumby Classic machine): the
+   Chumby's stock 2.6.16 kernel and firmware, from **your own device's**
+   flash backup (`emu/README.md` says how to build the images; they never
+   leave your machine). Use it for anything that depends on the kernel,
+   the flash, FAT, the boot or the handover to the stock software:
+   `NEOCHUMBY_EMU_MACHINE=chumby-classic dev/e2e TREE NEOCHUMBYD OUT` runs
+   the same scenarios on it. CI can't, having no firmware (and it never
+   will), so this suite is yours to run locally, and its results are the
+   evidence.
+3. **A real Chumby**, if you have one: deploy, then `neochumbyd log`,
+   `neochumbyd shot` (see [On a Chumby](#on-a-chumby)). Needed for what no
+   emulator models: timing, the touchscreen's noise, a USB stick's own
+   behaviour, power cuts.
+
+**The evidence to include:**
+- which of the three, and the commit you tested;
+- the commands you ran, and what they reported: `dev/e2e`'s
+  `OUT/summary.txt` (each scenario ok, skipped or FAILED), or a short log
+  excerpt showing the behaviour;
+- screenshots of **neochumby's** screens or your app's, as PNG, showing
+  the change.
+
+**Never attach:**
+- the stock software's screens or artwork (the control panel, the Chumby
+  logo or octopus, widgets), firmware, images, or anything from a
+  device's settings ([docs/legal.md](docs/legal.md));
+- anything that identifies you, your network or your device: addresses,
+  host and network names, Wi-Fi names, a device's name or serial. Cut
+  them from logs before pasting.
+
+If you couldn't test something (no Chumby, or a path no emulator covers
+yet), say which and why. A reviewer may run it on a Chumby for you.
+
+### Scenarios run everywhere
+
+The automated scenarios (`dev/emulate-smoke`, `dev/emulate-powercut`,
+`dev/emulate-classic`, and any you add to `dev/e2e`) use only `dev/emulate`'s verbs, `start`, `log`/`wait log`,
+`shot`, `tap`, `button` and `stop`, so the same scenario runs on user
+mode, on the emulator (`--machine chumby-classic`) and on a real Chumby
+(`--device NAME`, through `neochumbyd`; remote input needs that Chumby set
+`dev=on`). Write them so they pass on all three:
+
+1. **Assert on log lines** the session and apps print on purpose
+   (`opening home`, `escape: ending …`), not on timing or on the order of
+   unrelated lines. If a scenario needs to see something happen, print a
+   line for it.
+2. **Compare screenshots by regions of our own screens**, masking what
+   changes (the clock, time-dependent pictures). Never compare against, or
+   commit, the stock software's screens.
+3. **Wait with timeouts the backend scales**: user mode is fast, a real
+   Chumby and the emulator in real time are not.
+4. **What a backend can't do is skipped there, not failed**, with the
+   reason: remote input can't reach an app that holds the top button
+   itself (`button = true`), and there's no stick on the emulator until
+   it models USB.
+5. **Physical steps** (pull the power, plug in a stick) are prompts the
+   runner shows and waits on, checked from the log afterwards; they run
+   only with `--device` and someone there.

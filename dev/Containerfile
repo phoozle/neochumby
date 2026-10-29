@@ -1,0 +1,11 @@
+# dev/emulate's Linux on a Mac, for Apple's container (macOS 26 on):
+# `dev/emulate vm start` builds it as the image neochumby-emulate and runs it
+# with this checkout shared at the same path. What user mode needs: Python,
+# FUSE, util-linux's mount, dosfstools and a static qemu-arm (registered
+# with binfmt_misc at each start, by dev/emulate: it's the VM's, not the
+# image's).
+FROM docker.io/library/ubuntu:24.04
+RUN apt-get update -q \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends \
+      python3 fuse3 dosfstools mount qemu-user-static \
+ && rm -rf /var/lib/apt/lists/*

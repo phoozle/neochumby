@@ -1,0 +1,41 @@
+#!/bin/sh
+# run KERNEL NAND [QEMU OPTIONS...]: boots a zImage and a NAND image on
+# QEMU's chumby-classic machine, with the console on stdio (unless a
+# -serial option is given) and QMP on qmp.sock in the current directory.
+#
+# Uses $QEMU if set, else the binary emu/qemu/build made, else
+# qemu-system-arm from PATH if it has the chumby-classic machine.
+set -eu
+
+if [ $# -lt 2 ]; then
+    echo "usage: $0 KERNEL NAND [QEMU OPTIONS...]" >&2
+    exit 2
+fi
+kernel=$1
+nand=$2
+shift 2
+
+here=$(cd "$(dirname "$0")" && pwd)
+if [ -z "${QEMU:-}" ]; then
+    if [ -x "$here/out/obj/qemu-system-arm" ]; then
+        QEMU=$here/out/obj/qemu-system-arm
+    elif command -v qemu-system-arm >/dev/null 2>&1 &&
+        qemu-system-arm -machine help 2>/dev/null | grep -q '^chumby-classic '; then
+        QEMU=qemu-system-arm
+    else
+        echo "$0: no QEMU with the chumby-classic machine; run $here/build first" >&2
+        exit 1
+    fi
+fi
+
+serial="-serial stdio"
+for a in "$@"; do
+    if [ "$a" = "-serial" ]; then
+        serial=
+    fi
+done
+
+# shellcheck disable=SC2086 # $serial is empty or two words.
+exec "$QEMU" -M chumby-classic -kernel "$kernel" \
+    -drive "if=mtd,file=$nand,format=raw" $serial \
+    -qmp unix:qmp.sock,server=on,wait=off "$@"

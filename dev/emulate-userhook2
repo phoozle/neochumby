@@ -1,0 +1,35 @@
+#!/bin/sh
+# dev/emulate --machine chumby-classic's boot hook, /psp/rfs1/userhook2 in its
+# NAND image (from emu/tests/userhook2 in #25).
+# The emulated Chumby has no USB stick, so dev/emulate puts one in the Cache
+# partition (mtd6): a JFFS2 image laid out as tools/stick lays out a stick
+# (userhook2, neochumby/). This mounts it at /mnt/usb, where a stick would
+# be, and runs the stick's own hook from it, unchanged. The hook's log is
+# copied to the console, which is how dev/emulate follows the session.
+#
+# The stock boot runs /mnt/usb/userhook2 before this one, but /mnt/usb is
+# empty then: nothing runs twice.
+
+LOG=/tmp/neochumby.log
+
+mkdir -p /mnt/usb
+mount -t jffs2 -o ro /dev/mtdblock6 /mnt/usb || {
+  echo "emutest: no stick in the Cache partition"
+  exit 0
+}
+[ -f /mnt/usb/userhook2 ] || {
+  echo "emutest: the Cache partition holds no userhook2"
+  exit 0
+}
+echo "emutest: stick mounted"
+: >>"$LOG"
+tail -f "$LOG" &
+tail=$!
+sh /mnt/usb/userhook2
+status=$?
+# tail looks at the log once a second: lets it copy the last lines, so
+# that what follows comes after them on the console.
+sleep 2
+kill "$tail"
+echo "emutest: hook returned: $status"
+exit 0

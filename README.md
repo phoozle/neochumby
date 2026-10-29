@@ -35,8 +35,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's xterm-256color compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
-| `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
-| `apps/nowplaying` | NOW PLAYING: what the airplay app plays (title, artist, album, cover art, progress), with previous, play/pause and next; optional | MIT |
+| `apps/airplay` | AIRPLAY: a receiver per Chumby on neochumbyd, played on the Chumby's speaker, with a now-playing screen (the track, its cover, progress, previous/play/pause/next) | MIT |
 | `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
 | `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) on the library's terminal, beside a Chumby | MIT |
@@ -52,6 +51,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
+| `emu/` | The emulator: QEMU's `chumby-classic` machine, from [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit, which boots the stock firmware from your own flash backup; and chumby-emu, a host tool that builds its images | MIT (the machine: GPL-2.0-or-later, like QEMU) |
 
 Everything we write is MIT, except in `apps/doom`, `apps/quake`,
 `apps/htop`, `apps/top`, `apps/cmatrix`, `apps/bonsai`, `apps/pipes` and
@@ -168,8 +168,7 @@ userhook2                  the boot hook, which pairing installs
 apps/home/                 neochumby-home, manifest
 apps/doom/                 neochumby-doom, manifest, doom1.wad
 apps/quake/                neochumby-quake, manifest, id1/pak0.pak, id1/autoexec.cfg
-apps/airplay/              neochumby-airplay, neochumby-airplay-companion, manifest
-apps/nowplaying/           neochumby-nowplaying, -service, -companion, manifest
+apps/airplay/              neochumby-airplay, neochumby-airplay-screen, neochumby-airplay-companion, manifest
 apps/logs/                 neochumby-logs, neochumby-logs-companion, manifest
 apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.txt
 apps/htop/                 neochumby-htop, manifest
@@ -241,22 +240,19 @@ Chumby"), and the Chumby plays the audio. The host provides
 `NEOCHUMBY_AIRPLAY_PORT` (default 7350): RTSP from the base, UDP from
 base + 10. Each Chumby keeps the same ports.
 
-The companion also turns on shairport-sync's metadata pipe, and the
-service hands what comes through it, unparsed, to any app that connects
-to the local socket `neochumby-airplay-meta`.
-
-**Now playing** (the nowplaying app, optional, with airplay): what AirPlay
-plays, with the title, artist, album and cover art, where the track has got
-to, and previous, play/pause and next; or "Ready for AirPlay" and the name
-to choose. Its service passes the airplay app's metadata to its own
-companion, which parses it and scales the cover art for the Chumby. The
-buttons go to the phone or Mac as DACP remote-control requests from the
-server. Their port comes from shairport-sync when it's built with a
-remote-control interface (D-Bus, MPRIS or MQTT), else from avahi's
-`avahi-browse` (avahi-utils). Senders that offer no remote control get
-dimmed buttons. shairport-sync must be built with metadata
-(`--with-metadata`, or `--with-metadata-pipe` from 5.0); without it,
-AirPlay plays as before and this stays ready.
+AIRPLAY's screen shows what's playing: the title, artist, album and cover
+art, where the track has got to, and previous, play/pause and next. A
+stream beginning opens it over the start app; otherwise it shows "Ready for
+AirPlay" and the name to choose. For that, shairport-sync must be built
+with metadata (`--with-metadata`, or `--with-metadata-pipe` from 5.0); the
+companion turns its metadata pipe on and scales the cover art for the
+Chumby. Without it, AirPlay plays as before, with no details. The buttons
+go to the phone or Mac as DACP remote-control requests. Their port comes
+from shairport-sync when it's built with a remote-control interface
+(D-Bus, MPRIS or MQTT), else from avahi's `avahi-browse` (avahi-utils).
+Senders that offer no remote control get dimmed buttons. Text
+outside ISO 8859-1 (Japanese, emoji) shows as `?`: the screen's fonts are
+Latin-1.
 
 **Logs** (the logs app): the Chumby's own logs first, then, on a paired
 Chumby, the host's, from its companion. ◀ and ▶ along the top go from
@@ -372,6 +368,30 @@ times out every step that could block, and returns to the stock boot if
 anything fails. To skip it, create `/psp/neochumby-off`, or put a file
 named `neochumby-off` on a stick. neochumby never starts SSH; enable it
 yourself from the Chumby's settings (Chumby info → π) when you need it.
+
+## The emulator
+
+QEMU's `chumby-classic` machine runs a Chumby without the device: the
+stock kernel, root disk and settings partition from your own flash
+backup, unmodified, to the stock control panel, with the screen,
+touchscreen, serial console and flash working. The machine lives in
+[qemu-chumby](https://github.com/johnmerchant/qemu-chumby) (patches
+against a pinned QEMU release); `emu/` builds it at a pinned commit and
+makes the images. [`emu/README.md`](emu/README.md) has the details.
+
+```sh
+emu/qemu/build                       # QEMU with the machine (deps: emu/README.md)
+(cd emu && cargo build --release)    # chumby-emu, the image tools
+emu/target/release/chumby-emu mkpsp PSPDIR psp.jffs2
+emu/target/release/chumby-emu mknand BACKUPDIR psp.jffs2 nand.img
+emu/qemu/run zImage nand.img         # console on stdio, QMP on qmp.sock
+emu/qemu/qemu-chumby/chumby-ctl qmp.sock tap 160 120      # touch at a pixel
+emu/qemu/qemu-chumby/chumby-ctl qmp.sock shot screen.png  # screenshot
+```
+
+The NAND image is written as the Chumby writes its flash; add `-snapshot`
+to keep it unchanged, and `-icount shift=auto,sleep=off` to boot in a few
+seconds rather than in real time.
 
 ## Game data
 

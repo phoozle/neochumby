@@ -31,3 +31,6 @@
 [submodule "apps/aquarium/third_party/asciiquarium-rs"]
 	path = apps/aquarium/third_party/asciiquarium-rs
 	url = https://github.com/cablehead/asciiquarium-rs
+[submodule "emu/qemu/qemu-chumby"]
+	path = emu/qemu/qemu-chumby
+	url = https://github.com/johnmerchant/qemu-chumby

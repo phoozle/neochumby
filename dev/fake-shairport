@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A stand-in for shairport-sync, for the airplay app's companion in tests
-(dev/emulate-nowplaying): no AirPlay, but what shairport-sync would send the
+(dev/emulate-airplay): no AirPlay, but what shairport-sync would send the
 companion while a phone played to it, and a phone's remote-control (DACP)
 server to take the Chumby's buttons. Stdlib only.
 

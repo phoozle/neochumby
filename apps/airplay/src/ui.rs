@@ -1,17 +1,19 @@
 //! The now-playing screen, drawn into a [`Canvas`] the size of the
-//! Chumby's screen (320x240 RGB565) that the screen app copies to
-//! /dev/fb0 whole, so a redraw never flickers. Kept apart from the device
+//! Chumby's screen (320x240 RGB565), from which [`present`] copies to
+//! /dev/fb0 only the rows that changed, so a redraw never flickers and the
+//! progress moving costs a few rows, not the screen. Kept apart from the device
 //! so that the layout is drawn and checked on the host too.
 //!
 //! Playing: the cover on the left, the title (two lines at most), artist,
 //! album and sender beside it; the progress bar with the time gone and the
 //! track's length; previous, play/pause and next along the bottom, dimmed
 //! when the sender takes no remote control. Idle: "Ready for AirPlay" and
-//! the name to pick on the phone, or, without the companion or the airplay
-//! app's feed, that it's waiting for them.
+//! the name to pick on the phone, or, without the companion, that it's
+//! waiting for neochumbyd.
 //!
-//! Text is ISO 8859-1 (embedded-graphics' fonts); a character outside it
-//! shows as '?'. Everything is integer arithmetic.
+//! Text is ISO 8859-1 (embedded-graphics' fonts): a character outside it,
+//! Japanese or an emoji, shows as one '?' ([`latin1`]), before lines are
+//! wrapped and cut, so they come out the same length as they're counted. Everything is integer arithmetic.
 
 use std::convert::Infallible;
 
@@ -124,6 +126,21 @@ fn colour(c: u16) -> Rgb565 {
     Rgb565::from(RawU16::new(c))
 }
 
+/// Copies the rows of `c` that differ from `shown` (what the screen holds
+/// now) to `screen` and `shown`, or all of them if `full`; how many rows
+/// it copied. While a track plays, that's the progress bar and the times.
+pub fn present(c: &Canvas, shown: &mut [u16], screen: &mut [u16], full: bool) -> usize {
+    let mut copied = 0;
+    for ((row, was), dst) in c.px.chunks_exact(W).zip(shown.chunks_exact_mut(W)).zip(screen.chunks_exact_mut(W)) {
+        if full || row != was {
+            dst.copy_from_slice(row);
+            was.copy_from_slice(row);
+            copied += 1;
+        }
+    }
+    copied
+}
+
 /// The button at (x, y), if any.
 pub fn hit(x: i32, y: i32) -> Option<Control> {
     if !(BUTTON_Y..BUTTON_Y + BUTTON_H).contains(&y) {
@@ -152,8 +169,8 @@ pub fn draw(c: &mut Canvas, np: &NowPlaying, now_ms: u64, pressed: Option<Contro
 fn idle(c: &mut Canvas, np: &NowPlaying) {
     let (head, lines): (&str, &[&str]) = if !np.linked {
         (
-            "Waiting for AirPlay",
-            &["This shows what the AIRPLAY", "app plays, once it and this", "Chumby's server answer."],
+            "Waiting for neochumbyd",
+            &["AirPlay plays through this", "Chumby's server. It will be", "ready once that answers."],
         )
     } else {
         ("Ready for AirPlay", &["Play from an iPhone, iPad or Mac,", "and choose this Chumby", "as the speaker."])
@@ -297,10 +314,17 @@ fn chars(font: &MonoFont<'_>, px: i32) -> usize {
     (px / (font.character_size.width + font.character_spacing) as i32).max(1) as usize
 }
 
+/// `s` as the fonts can show it: '?' for each character outside ISO
+/// 8859-1's printable ones (and for control characters).
+pub fn latin1(s: &str) -> String {
+    s.chars().map(|c| if matches!(c as u32, 0x20..=0x7e | 0xa0..=0xff) { c } else { '?' }).collect()
+}
+
 /// `s` in lines of at most `cols` characters, broken between words where
 /// it can be, and at most `lines` of them: the last one cut short with
-/// "..." if the rest didn't fit.
+/// "..." if the rest didn't fit. Characters the fonts lack are '?' first.
 pub fn wrap(s: &str, cols: usize, lines: usize) -> Vec<String> {
+    let s = &latin1(s);
     let mut out: Vec<String> = Vec::new();
     let mut line = String::new();
     let mut cut = false;
@@ -465,6 +489,41 @@ mod tests {
     }
 
     #[test]
+    fn only_changed_rows_are_copied() {
+        let state = np(Play::Playing, true);
+        let mut c = Canvas::new();
+        let (mut shown, mut screen) = (vec![0u16; W * H], vec![0u16; W * H]);
+        draw(&mut c, &state, 0, None);
+        assert_eq!(present(&c, &mut shown, &mut screen, true), H);
+        assert_eq!(present(&c, &mut shown, &mut screen, false), 0);
+        // Two seconds on: the bar and the time, nothing above or below.
+        let before = shown.clone();
+        draw(&mut c, &state, 2_000, None);
+        let rows = present(&c, &mut shown, &mut screen, false);
+        assert!(rows > 0 && rows <= 20, "{rows} rows");
+        let changed: Vec<usize> = (0..H).filter(|&y| before[y * W..][..W] != shown[y * W..][..W]).collect();
+        assert!(changed.iter().all(|&y| (BAR_Y as usize..BUTTON_Y as usize).contains(&y)), "{changed:?}");
+        assert_eq!(screen, c.pixels());
+    }
+
+    #[test]
+    fn titles_outside_latin_1() {
+        assert_eq!(latin1("Beyoncé Sigur Rós"), "Beyoncé Sigur Rós");
+        assert_eq!(latin1("東京 🎵 Tōkyō\u{7}"), "?? ? T?ky??");
+        assert_eq!(wrap("東京の夜 🎵 Tōkyō Night", 10, 2), ["???? ?", "T?ky?..."]);
+        assert_eq!(wrap("あいうえおかきくけこさしすせそ", 6, 2), ["??????", "???..."]);
+        // Drawn, each is the font's '?'.
+        let titled = |title: &str| {
+            let mut state = np(Play::Playing, true);
+            state.apply(Frame::Track(Track { title: title.into(), ..Track::default() }), 0);
+            let mut c = Canvas::new();
+            draw(&mut c, &state, 0, None);
+            c
+        };
+        assert_eq!(titled("東京 🎵").pixels(), titled("?? ?").pixels());
+    }
+
+    #[test]
     fn wrapping() {
         assert_eq!(wrap("one two three", 7, 3), ["one two", "three"]);
         assert_eq!(wrap("one two three four", 7, 2), ["one two", "thre..."]);
@@ -474,12 +533,12 @@ mod tests {
         assert_eq!(wrap("  spaced   out ", 20, 1), ["spaced out"]);
     }
 
-    /// With NEOCHUMBY_NOWPLAYING_SHOTS=DIR, the screens as raw RGB565 files
+    /// With NEOCHUMBY_AIRPLAY_SHOTS=DIR, the screens as raw RGB565 files
     /// (320x240, little-endian), for dev/fb2png.py: evidence of the layout
     /// with made-up data and a generated cover.
     #[test]
     fn shots() {
-        let Some(dir) = std::env::var_os("NEOCHUMBY_NOWPLAYING_SHOTS") else { return };
+        let Some(dir) = std::env::var_os("NEOCHUMBY_AIRPLAY_SHOTS") else { return };
         let dir = std::path::PathBuf::from(dir);
         std::fs::create_dir_all(&dir).unwrap();
         let save = |name: &str, c: &Canvas| {
