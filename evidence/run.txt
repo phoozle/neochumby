@@ -1,0 +1,25 @@
+== boot, and SOMAFM on home
+dev/emulate: running (/home/runner/work/_temp/somafm/state); the session's output: dev/emulate log
+1.00 start.raw
+== a station: selected, on, and played
+1.00 deepspace.raw
+== pause, volume, skip
+1.00 stopped.raw
+1.00 quiet.raw
+1.00 lush.raw
+== DONE: home, and the music plays on
+== at night: the dark screen
+dev/emulate: running (/home/runner/work/_temp/somafm/state); the session's output: dev/emulate log
+1.00 night.raw
+-- the session's log:
+neochumby: NEOCHUMBY_JAIL=off: every app runs as root, unjailed
+neochumby: opening home
+neochumby: service somafm started
+neochumby-somafm-service: home in front
+neochumby-somafm-service: /usr/bin/chumby_set_volume: No such file or directory (os error 2)
+neochumby: somafm asks to play http://ice6.somafm.com/lush-128-mp3
+neochumby: /usr/bin/btplay: No such file or directory (os error 2)
+neochumby: home asks: open somafm
+neochumby: opening somafm
+neochumby-somafm-service: somafm in front
+dev/emulate-somafm: all passed
