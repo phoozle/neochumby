@@ -1,8 +1,6 @@
 neochumby: NEOCHUMBY_JAIL=off: every app runs as root, unjailed
 neochumby: opening home
 neochumby: service airplay started
-neochumby: service nowplaying started
-neochumby-nowplaying: the airplay app's metadata: connected
-neochumby: home asks: open nowplaying
-neochumby: opening nowplaying
 neochumby-airplay: /usr/bin/chumby_set_volume: No such file or directory (os error 2)
+neochumby: service airplay replaces home
+neochumby: opening airplay
