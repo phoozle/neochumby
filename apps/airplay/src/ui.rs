@@ -259,11 +259,13 @@ fn button(c: &mut Canvas, i: usize, b: Control, playing: bool, enabled: bool, li
     };
     let ink = if enabled { TEXT } else { FAINT };
     match b {
-        Control::PlayPause if playing => {
+        Control::PlayPause | Control::Pause | Control::Play if playing => {
             c.rect(cx - 10, cy - 12, 7, 24, ink);
             c.rect(cx + 3, cy - 12, 7, 24, ink);
         }
-        Control::PlayPause => tri(c, (cx - 9, cy - 13), (cx - 9, cy + 13), (cx + 13, cy)),
+        Control::PlayPause | Control::Pause | Control::Play => {
+            tri(c, (cx - 9, cy - 13), (cx - 9, cy + 13), (cx + 13, cy))
+        }
         Control::Next => {
             tri(c, (cx - 16, cy - 10), (cx - 16, cy + 10), (cx - 1, cy));
             tri(c, (cx - 1, cy - 10), (cx - 1, cy + 10), (cx + 14, cy));

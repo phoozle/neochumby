@@ -49,6 +49,8 @@ pub fn command(c: Control) -> &'static str {
         Control::PlayPause => "playpause",
         Control::Next => "nextitem",
         Control::Previous => "previtem",
+        Control::Pause => "pause",
+        Control::Play => "play",
     }
 }
 
@@ -183,6 +185,8 @@ mod tests {
         assert_eq!(command(Control::PlayPause), "playpause");
         assert_eq!(command(Control::Next), "nextitem");
         assert_eq!(command(Control::Previous), "previtem");
+        assert_eq!(command(Control::Pause), "pause");
+        assert_eq!(command(Control::Play), "play");
         assert!(!Remote::default().ready());
     }
 }

@@ -25,7 +25,9 @@
 //!
 //! From the screen to the service, and on to the companion:
 //!
-//!   [8] CONTROL + u8     1 play/pause, 2 next, 3 previous
+//!   [8] CONTROL + u8     1 play/pause, 2 next, 3 previous; and from the
+//!                        service alone, 4 pause and 5 play (the session's
+//!                        `pause` and `resume`, for a music app)
 //!
 //! A frame this end doesn't know is ignored, so types can be added.
 
@@ -96,6 +98,8 @@ pub enum Control {
     PlayPause = 1,
     Next = 2,
     Previous = 3,
+    Pause = 4,
+    Play = 5,
 }
 
 /// A frame other than audio, decoded.
@@ -200,6 +204,8 @@ impl Frame {
                 [1] => Control::PlayPause,
                 [2] => Control::Next,
                 [3] => Control::Previous,
+                [4] => Control::Pause,
+                [5] => Control::Play,
                 _ => return None,
             }),
             _ => return None,
@@ -256,6 +262,7 @@ mod tests {
             Frame::State(State { play: Play::Paused, controls: true, elapsed_ms: 61_500, duration_ms: 245_000 }),
             Frame::Link(true),
             Frame::Control(Control::Previous),
+            Frame::Control(Control::Play),
         ];
         for f in frames {
             assert_eq!(Frame::parse(&f.encode()), Some(f));

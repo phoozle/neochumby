@@ -21,6 +21,10 @@
 //! session to open the screen, which the session allows over the start app
 //! only.
 //!
+//! As a music app (#54), it takes the session's `pause` and `resume`: the
+//! sender is asked to pause or play, and the audio is dropped meanwhile in
+//! case it can't be.
+//!
 //! Connects to the paired neochumbyd (/psp/neochumby.conf) and checks its
 //! key against the one pinned there; reconnects, backing off, whenever the
 //! connection goes. The screens are looked after meanwhile.
@@ -33,7 +37,7 @@ use neochumby::audio::{self, Speaker};
 use neochumby::companion;
 use neochumby::conf;
 use neochumby::session::{Notice, Pipe, Request};
-use neochumby_airplay::frames::{AUDIO, END, Frame};
+use neochumby_airplay::frames::{AUDIO, Control, END, Frame};
 use neochumby_airplay::hub::Hub;
 use neochumby_airplay::link::{self, Peer};
 use neochumby_proto::{Identity, Msg, Session};
@@ -101,19 +105,40 @@ impl Screens {
     }
 }
 
-/// The session's request pipe, for opening the screen when a stream
-/// begins, and the app it says is in front.
+/// The session's request pipe: for opening the screen when a stream
+/// begins, the app it says is in front, and, as a music app, `pause` and
+/// `resume` (the start app's MUTE, relayed by the session; #54).
 struct Front {
     pipe: Option<Pipe>,
     app: Option<String>,
+    /// Paused by the session: the audio is dropped until `resume`, whether
+    /// or not the sender takes remote control.
+    held: bool,
+    /// `pause` and `resume` as commands for the sender, not yet sent.
+    asked: Vec<Control>,
 }
 
 impl Front {
     fn listen(&mut self) {
         let Some(p) = self.pipe.as_mut() else { return };
         for line in p.receive().lines {
-            if let Some(Notice::Front(app)) = Notice::parse(&line) {
-                self.app = Some(app);
+            // `pause` and `resume` are read as lines, which a session
+            // without music apps never sends (its Notice doesn't have them
+            // yet).
+            match line.as_str() {
+                "pause" => {
+                    self.held = true;
+                    self.asked.push(Control::Pause);
+                }
+                "resume" => {
+                    self.held = false;
+                    self.asked.push(Control::Play);
+                }
+                _ => {
+                    if let Some(Notice::Front(app)) = Notice::parse(&line) {
+                        self.app = Some(app);
+                    }
+                }
             }
         }
     }
@@ -154,12 +179,22 @@ fn play(mut s: Session, screens: &mut Screens, hub: &mut Hub, front: &mut Front)
     loop {
         let got = screens.poll(hub);
         controls(got, &mut s)?;
+        front.listen();
+        for c in std::mem::take(&mut front.asked) {
+            s.send(&Msg::Data(Frame::Control(c).encode()))?;
+        }
         let frame = match s.recv_timeout(TICK)? {
             Some(Msg::Data(f)) => f,
             Some(Msg::Closed) => return Err(io::Error::other("the companion has gone")),
             _ => continue,
         };
         match frame.split_first() {
+            Some((&AUDIO, _)) if front.held => {
+                // Paused by the session: silent, and the speaker free.
+                if speaker.take().is_some() {
+                    audio::withdraw();
+                }
+            }
             Some((&AUDIO, pcm)) => {
                 if speaker.as_ref().is_some_and(Speaker::yield_requested) {
                     eprintln!("neochumby-airplay: yielding the speaker to a newer player");
@@ -230,7 +265,7 @@ fn main() {
     };
     let mut screens = Screens::new();
     let mut hub = Hub::default();
-    let mut front = Front { pipe: Pipe::from_env(), app: None };
+    let mut front = Front { pipe: Pipe::from_env(), app: None, held: false, asked: Vec::new() };
     let mut backoff = 2;
     loop {
         let started = Instant::now();
@@ -257,6 +292,7 @@ fn main() {
         while Instant::now() < until {
             screens.poll(&hub);
             front.listen();
+            front.asked.clear();
             neochumby::sleep_ms(100);
         }
         backoff = (backoff * 2).min(60);

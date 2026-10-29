@@ -53,9 +53,10 @@ colour = "8c64dc"
 service = "neochumby-airplay"
 companion = "neochumby-airplay-companion"
 neochumbyd = "required"
-# FOLLOW-UP, once the `music` capability is in main (music apps, PR A):
-#   music = true
-# The manifest tool refuses keys it doesn't know until then.
+# FOLLOW-UP, once #54 (the `music` capability) is in main: `music = true`.
+# The service already takes the session's `pause` and `resume` lines, which
+# is what the flag promises; the manifest tool refuses the key until then.
+# And with #45: access = ["screen", "touch", "speaker"].
 
 [lints]
 workspace = true

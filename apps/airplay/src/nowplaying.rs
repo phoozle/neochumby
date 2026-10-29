@@ -66,14 +66,12 @@ impl NowPlaying {
     /// A button was pressed: show its effect at once, as the sender takes
     /// a second or two to say so. Its own report then has the last word.
     pub fn pressed(&mut self, c: Control, now_ms: u64) {
-        if c != Control::PlayPause {
-            return;
-        }
-        let elapsed_ms = self.elapsed_ms(now_ms);
-        let play = match self.state.play {
-            Play::Playing => Play::Paused,
-            Play::Paused | Play::Stopped => Play::Playing,
+        let play = match (c, self.state.play) {
+            (Control::PlayPause, Play::Playing) | (Control::Pause, _) => Play::Paused,
+            (Control::PlayPause, _) | (Control::Play, _) => Play::Playing,
+            (Control::Next | Control::Previous, _) => return,
         };
+        let elapsed_ms = self.elapsed_ms(now_ms);
         self.state = State { play, elapsed_ms, ..self.state };
         self.at_ms = now_ms;
     }

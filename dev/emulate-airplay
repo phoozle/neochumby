@@ -108,8 +108,9 @@ emu shot "$out/3-next.png"
 
 step "the stream ends: ready for AirPlay"
 echo end > "$fake/cmd"
-# The idle screen has no cover box: its corner is the background again.
-until_ok "[ \"\$('$dev/emulate' --state '$state' pixel 20 20)\" = '#101020' ]" 30 || fail "the screen didn't go idle"
+# The idle screen has no cover box: its corner is the background again
+# (16, 16, 32 in RGB565, widened as dev/fb2png.py does).
+until_ok "[ \"\$('$dev/emulate' --state '$state' pixel 20 20)\" = '#101021' ]" 30 || fail "the screen didn't go idle"
 emu wait screen 30 || fail "the screen didn't settle"
 emu shot "$out/4-ready.png"
 
