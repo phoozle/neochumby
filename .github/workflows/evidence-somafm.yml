@@ -1,0 +1,51 @@
+# Evidence for the somafm PR (branch-only, never merged): the PR's tree
+# under dev/emulate-somafm. The screenshots and the session's log are
+# uploaded as an artifact.
+name: Evidence, somafm under dev/emulate
+
+on:
+  push:
+    branches: [evidence/somafm-emulate]
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: 0.17.0
+
+jobs:
+  emulate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv5te-unknown-linux-musleabi
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: A tree with somafm, and the host's renderer
+        run: |
+          tools/tree "$RUNNER_TEMP/tree" somafm
+          cargo build -p neochumby-somafm --bin neochumby-somafm
+      - name: dev/emulate-somafm
+        timeout-minutes: 5
+        run: |
+          sudo apt-get update -q
+          # This fork's runner is Ubuntu 24.04, whose qemu-user-binfmt isn't
+          # static: qemu-user-static, as dev/emulate says for older releases.
+          sudo apt-get install -yq --no-install-recommends qemu-user-static dosfstools
+          set -o pipefail
+          sudo dev/emulate-somafm "$RUNNER_TEMP/tree" "$PWD/target/debug/neochumby-somafm" "$RUNNER_TEMP/somafm" 2>&1 | tee "$RUNNER_TEMP/run.txt"
+      - name: Collect
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          sudo sh -c 'cp "$1"/*.png "$1"/log.txt "$2"/ 2>/dev/null; cp "$3" "$2"/' sh "$RUNNER_TEMP/somafm" "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/run.txt"
+          sudo chown -R "$(id -u)" "$RUNNER_TEMP/evidence"
+          ls -la "$RUNNER_TEMP/evidence"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: somafm-emulate
+          path: ${{ runner.temp }}/evidence
