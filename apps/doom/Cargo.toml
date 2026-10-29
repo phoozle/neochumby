@@ -21,6 +21,7 @@ colour = "dc281e"
 # A game: no service may replace it in front, and the top button fires.
 interrupt = false
 button = true
+access = ["screen", "touch", "speaker"]
 
 [lints]
 workspace = true

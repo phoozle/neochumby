@@ -46,16 +46,19 @@
 
 use std::os::fd::RawFd;
 use std::path::Path;
-use std::process::{Child, ExitStatus};
+use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
 use neochumby::session::{Notice, Pipe, Request};
 
+use neochumby_sys::jail::Process;
 use neochumby_sys::process::exited;
 
 use crate::button::Edges;
 use crate::child;
+use crate::jail::{self, Role};
+use crate::network;
 use crate::services::{Backoff, Services};
 use crate::start;
 
@@ -66,6 +69,9 @@ pub trait Device {
     /// Mutes the speaker and puts back the volume the Chumby booted with,
     /// waiting up to `wait` for the volume to be set.
     fn reset_speaker(&mut self, wait: Duration);
+    /// Sets the master volume to `volume` and unmutes, for a jailed app
+    /// that asked (`speaker <volume>`).
+    fn unmute(&mut self, volume: u32);
     /// The live process holding the speaker (neochumby::audio), if one
     /// does.
     fn speaker_holder(&self) -> Option<u32>;
@@ -144,7 +150,7 @@ enum Next<'a> {
 /// The app in front.
 struct Front<'a> {
     app: &'a App,
-    child: Child,
+    child: Process,
     pipe: Pipe,
     /// What it asked for, and when it first asked.
     asked: Option<(Next<'a>, Instant)>,
@@ -165,6 +171,13 @@ pub struct Session<'a, D: Device> {
     suppressed: bool,
     last_open: Option<Instant>,
     button: Edges,
+    /// The app, as its exec or its service, that the session unmuted the
+    /// speaker for: only its `speaker off` mutes it again (a player that
+    /// yielded may say so after the next one asked), and when it goes the
+    /// speaker is put back.
+    speaker_by: Option<(&'a str, Role)>,
+    /// When to look for apps on the network without `network`.
+    network: network::Watch,
 }
 
 /// Whether the service of the app `from` may replace `front` in front;
@@ -204,6 +217,8 @@ impl<'a, D: Device> Session<'a, D> {
             services,
             suppressed: false,
             button: Edges::default(),
+            speaker_by: None,
+            network: network::Watch::new(),
         }
     }
 
@@ -229,7 +244,15 @@ impl<'a, D: Device> Session<'a, D> {
             }
             self.last_open = Some(Instant::now());
             next = match self.open(app, reason) {
-                Ok(front) => self.watch(front),
+                Ok(front) => {
+                    let next = self.watch(front);
+                    // It has gone, with whatever it started.
+                    if self.speaker_by == Some((app.name.as_str(), Role::Front)) {
+                        self.speaker_by = None;
+                        self.device.reset_speaker(Duration::ZERO);
+                    }
+                    next
+                }
                 Err(e) => {
                     eprintln!("neochumby: {}: {e}", app.name);
                     self.failed(app)
@@ -254,19 +277,17 @@ impl<'a, D: Device> Session<'a, D> {
 
     fn open(&mut self, app: &'a App, reason: Option<&'static str>) -> std::io::Result<Front<'a>> {
         let exe = app.exec.as_ref().ok_or_else(|| std::io::Error::other("no exec"))?;
-        let mut cmd = child::command(exe, &app.dir, self.root);
+        let mut launch = child::launch(app, exe, Role::Front, self.root);
         if let Some(r) = reason {
-            cmd.env(neochumby::session::REASON_ENV, r);
+            launch.env(neochumby::session::REASON_ENV, r);
         }
         eprintln!("neochumby: opening {}{}", app.name, reason.map(|r| format!(" ({r})")).unwrap_or_default());
-        let mut inherit = Vec::new();
         if app.button
             && let Some(fd) = self.device.button_fd()
         {
-            cmd.env(neochumby::input::BUTTON_ENV, fd.to_string());
-            inherit.push(fd);
+            launch.env(neochumby::input::BUTTON_ENV, fd.to_string()).keep(fd);
         }
-        let (child, pipe) = child::spawn(cmd, &inherit)?;
+        let (child, pipe) = launch.spawn()?;
         self.services.front(&app.name);
         Ok(Front { app, child, pipe, asked: None, unknown: 0 })
     }
@@ -306,6 +327,9 @@ impl<'a, D: Device> Session<'a, D> {
             self.read(&mut f);
             let ev = self.services.poll(&f.app.name);
             if !ev.died.is_empty() {
+                if ev.died.iter().any(|(app, _)| self.speaker_by == Some((app.name.as_str(), Role::Service))) {
+                    self.speaker_by = None;
+                }
                 // The dead service, or something it started, may have held
                 // the speaker; a live player that holds it is left alone.
                 match self.device.speaker_holder() {
@@ -314,6 +338,10 @@ impl<'a, D: Device> Session<'a, D> {
                 }
             }
             for (from, req) in ev.requests {
+                if let Request::Speaker(on) = req {
+                    self.speaker(from, Role::Service, on);
+                    continue;
+                }
                 if f.asked.is_some() {
                     eprintln!(
                         "neochumby: service {} asks: {}; dropped: {} has asked already",
@@ -327,6 +355,17 @@ impl<'a, D: Device> Session<'a, D> {
                     eprintln!("neochumby: service {} replaces {}", from.name, f.app.name);
                     let _ = child::end(&mut f.child, self.timing.patience);
                     return next;
+                }
+            }
+            if let Some(owners) = self.network.due() {
+                self.services.end_offline(&owners);
+                if jail::offline(f.app).is_some_and(|n| owners.contains(&n)) {
+                    eprintln!(
+                        "neochumby: {} has an internet socket open, without network access; ending it",
+                        f.app.name
+                    );
+                    let status = child::end(&mut f.child, Duration::ZERO);
+                    return self.ended(f, status);
                 }
             }
             // Exited, but not reaped yet (process::exited), so its group
@@ -348,10 +387,39 @@ impl<'a, D: Device> Session<'a, D> {
         }
     }
 
+    /// `speaker <volume>` or `speaker off` from `app`, as `role`: only for
+    /// an app whose access lists the speaker.
+    fn speaker(&mut self, app: &'a App, role: Role, on: Option<u32>) {
+        if !app.access.speaker {
+            eprintln!("neochumby: {}: asks for the speaker, but its access doesn't list it", app.name);
+            return;
+        }
+        match on {
+            Some(v) => eprintln!("neochumby: {} asks for the speaker, at {v}", app.name),
+            None => eprintln!("neochumby: {} gives the speaker back", app.name),
+        }
+        match on {
+            Some(v) => {
+                self.device.unmute(v);
+                self.speaker_by = Some((app.name.as_str(), role));
+            }
+            None if self.speaker_by == Some((app.name.as_str(), role)) => {
+                self.speaker_by = None;
+                self.device.reset_speaker(Duration::ZERO);
+            }
+            // A player that yielded, after the next one took the speaker.
+            None => {}
+        }
+    }
+
     /// Takes in what the app in front has asked for.
     fn read(&mut self, f: &mut Front<'a>) {
         for line in f.pipe.receive().lines {
             let next = match Request::parse(&line) {
+                Some(Request::Speaker(on)) => {
+                    self.speaker(f.app, Role::Front, on);
+                    continue;
+                }
                 Some(Request::ChumbyMode) => Next::ChumbyMode,
                 Some(Request::Open(name)) => match self.openable(&name) {
                     Ok(app) => {
@@ -393,6 +461,8 @@ impl<'a, D: Device> Session<'a, D> {
                 return None;
             }
             Request::ChumbyMode => Next::ChumbyMode,
+            // Taken in before it gets here (watch).
+            Request::Speaker(_) => return None,
             Request::Open(name) if *name == f.app.name => return None,
             Request::Open(name) => match self.openable(name) {
                 Ok(app) => Next::Open(app, None),
@@ -484,6 +554,8 @@ mod tests {
     struct Fake {
         escape: Arc<AtomicBool>,
         resets: Arc<AtomicUsize>,
+        /// The volumes the speaker was unmuted at, in order.
+        unmuted: Arc<Mutex<Vec<u32>>>,
         /// The button's level, and a file standing in for it.
         down: Arc<AtomicBool>,
         switch: Option<Arc<std::fs::File>>,
@@ -502,6 +574,10 @@ mod tests {
 
         fn reset_speaker(&mut self, _wait: Duration) {
             self.resets.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn unmute(&mut self, volume: u32) {
+            self.unmuted.lock().unwrap().push(volume);
         }
 
         fn speaker_holder(&self) -> Option<u32> {
@@ -687,6 +763,29 @@ mod tests {
     }
 
     #[test]
+    fn the_speaker_is_set_for_apps_whose_access_lists_it() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree(
+            "speaker",
+            &[
+                ("home", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nask 'open quiet'"),
+                // Not allowed: nothing happens.
+                ("quiet", "", "ask 'speaker 90'; sleep 0.3; ask 'open loud'"),
+                // Unmuted at one volume, then another; its going, without
+                // `speaker off`, puts the speaker back.
+                ("loud", "access=screen,speaker\n", "ask 'speaker 40'; sleep 0.3; ask 'speaker 70'; sleep 0.3"),
+            ],
+        );
+        let fake = Fake::default();
+        let (unmuted, resets) = (fake.unmuted.clone(), fake.resets.clone());
+        run_on(&root, &[("settings", "home")], fake);
+        assert_eq!(log(&root), ["home", "quiet", "loud", "home"]);
+        assert_eq!(*unmuted.lock().unwrap(), [40, 70]);
+        // Once as loud went, and once as the session ended.
+        assert_eq!(resets.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
     fn apps_open_apps_and_the_start_app_comes_back() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         let root = tree(
@@ -866,6 +965,9 @@ mod tests {
             neochumby::sleep_ms(100);
             down.store(false, Ordering::SeqCst);
             wait_for(&r, "game");
+            // Up for a few of the session's ticks first, so that it sees the
+            // release whenever the game opened.
+            neochumby::sleep_ms(100);
             press(&down);
         });
         run_on(&root, &[("settings", "wx")], fake);
@@ -1096,6 +1198,8 @@ mod tests {
             start: false,
             interrupt: false,
             button: false,
+            companion: false,
+            access: Default::default(),
         }];
         let all = apps::all(&root);
         let start = start::choose(&all, Some(("settings", "wx"))).expect("a start app");

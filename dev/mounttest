@@ -9,7 +9,7 @@ path=${3:-/}
 MNT=/mnt/neochumby
 mkdir -p "$MNT"
 grep -q " $MNT " /proc/mounts && { echo "already mounted"; ls -l "$MNT" "$MNT/apps"; exit 0; }
-mount -t nfs -o "ro,nolock,tcp,nfsvers=3,port=$port,mountport=$port,soft,timeo=30,retrans=2,retry=0" \
+mount -t nfs -o "ro,nosuid,nodev,nolock,tcp,nfsvers=3,port=$port,mountport=$port,soft,timeo=30,retrans=2,retry=0" \
   "$server:$path" "$MNT" &
 pid=$!
 i=0

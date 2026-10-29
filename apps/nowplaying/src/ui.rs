@@ -7,8 +7,8 @@
 //! album and sender beside it; the progress bar with the time gone and the
 //! track's length; previous, play/pause and next along the bottom, dimmed
 //! when the sender takes no remote control. Idle: "Ready for AirPlay" and
-//! the name to pick on the phone, or, without the companion, that it's
-//! waiting for neochumbyd.
+//! the name to pick on the phone, or, without the companion or the airplay
+//! app's feed, that it's waiting for them.
 //!
 //! Text is ISO 8859-1 (embedded-graphics' fonts); a character outside it
 //! shows as '?'. Everything is integer arithmetic.
@@ -152,8 +152,8 @@ pub fn draw(c: &mut Canvas, np: &NowPlaying, now_ms: u64, pressed: Option<Contro
 fn idle(c: &mut Canvas, np: &NowPlaying) {
     let (head, lines): (&str, &[&str]) = if !np.linked {
         (
-            "Waiting for neochumbyd",
-            &["AirPlay plays through this", "Chumby's server. It will be", "ready once that answers."],
+            "Waiting for AirPlay",
+            &["This shows what the AIRPLAY", "app plays, once it and this", "Chumby's server answer."],
         )
     } else {
         ("Ready for AirPlay", &["Play from an iPhone, iPad or Mac,", "and choose this Chumby", "as the speaker."])
@@ -474,12 +474,12 @@ mod tests {
         assert_eq!(wrap("  spaced   out ", 20, 1), ["spaced out"]);
     }
 
-    /// With NEOCHUMBY_AIRPLAY_SHOTS=DIR, the screens as raw RGB565 files
+    /// With NEOCHUMBY_NOWPLAYING_SHOTS=DIR, the screens as raw RGB565 files
     /// (320x240, little-endian), for dev/fb2png.py: evidence of the layout
     /// with made-up data and a generated cover.
     #[test]
     fn shots() {
-        let Some(dir) = std::env::var_os("NEOCHUMBY_AIRPLAY_SHOTS") else { return };
+        let Some(dir) = std::env::var_os("NEOCHUMBY_NOWPLAYING_SHOTS") else { return };
         let dir = std::path::PathBuf::from(dir);
         std::fs::create_dir_all(&dir).unwrap();
         let save = |name: &str, c: &Canvas| {

@@ -38,7 +38,7 @@ fn main() {
     if args.next().as_deref() == Some("htop") {
         htop(args);
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Some(exe) = neochumby::apps::exe() else {
         eprintln!("neochumby-htop: can't find myself");
         std::process::exit(1);
     };

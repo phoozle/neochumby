@@ -1,12 +1,13 @@
 #!/bin/sh
-# AirPlay's now-playing screen under dev/emulate, end to end but for
-# AirPlay itself: a neochumbyd on this PC runs the airplay app's companion
-# with dev/fake-shairport in shairport-sync's place (made-up metadata, a
-# generated cover, silence, and a sender's remote-control server). It checks
-# that
-#   - once paired, the airplay service opens its companion, and the stream
-#     beginning opens the screen over the home screen (the session's log);
-#   - the screen shows the track, with the generated cover in its box;
+# The nowplaying app under dev/emulate, end to end but for AirPlay itself:
+# a neochumbyd on this PC runs the airplay app's companion, with
+# dev/fake-shairport in shairport-sync's place (made-up metadata, a
+# generated cover, silence, and a sender's remote-control server), and the
+# nowplaying app's. It checks that
+#   - once paired, nowplaying's service reads the airplay app's metadata,
+#     and NOW PLAYING, opened from the home screen, is ready for AirPlay;
+#   - when the fake phone plays, the screen shows the track, with the
+#     generated cover in its box;
 #   - play/pause on the screen reaches the sender as DACP, with its
 #     Active-Remote token, and the screen shows it paused;
 #   - next reaches it too, and the screen shows the next track's cover;
@@ -14,15 +15,16 @@
 # Screenshots, the session's and neochumbyd's logs and the requests the
 # sender got go in OUT.
 #
-#   sudo dev/emulate-airplay TREE NEOCHUMBYD OUT
+#   sudo dev/emulate-nowplaying TREE NEOCHUMBYD OUT
 #
-# TREE from tools/tree, with airplay (its companion built for this PC);
+# TREE from tools/tree, with airplay and nowplaying (companions built for
+# this PC);
 # NEOCHUMBYD the x86_64 neochumbyd. User mode only: it pairs the emulated
 # Chumby with that neochumbyd through neochumby-home's PAIR.
 set -eu
-tree=${1:?usage: dev/emulate-airplay TREE NEOCHUMBYD OUT}
-neochumbyd=${2:?usage: dev/emulate-airplay TREE NEOCHUMBYD OUT}
-out=${3:?usage: dev/emulate-airplay TREE NEOCHUMBYD OUT}
+tree=${1:?usage: dev/emulate-nowplaying TREE NEOCHUMBYD OUT}
+neochumbyd=${2:?usage: dev/emulate-nowplaying TREE NEOCHUMBYD OUT}
+out=${3:?usage: dev/emulate-nowplaying TREE NEOCHUMBYD OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$out"
 state=$out/state
@@ -46,7 +48,7 @@ until_ok() {
     sleep 0.1
   done
 }
-# The screen's buttons (neochumby_airplay::ui): previous, play/pause and
+# The screen's buttons (neochumby_nowplaying::ui): previous, play/pause and
 # next along the bottom, 94 wide from x=10, 104 apart; y 176 to 232.
 PLAY_X=160 NEXT_X=263 BUTTONS_Y=204
 # Taps spaced past the touchscreen's echo filter (350 ms).
@@ -55,7 +57,21 @@ tap() {
   emu tap "$@"
 }
 
-[ -x "$tree/apps/airplay/neochumby-airplay-screen" ] || fail "$tree has no airplay with its screen"
+[ -x "$tree/apps/airplay/neochumby-airplay" ] || fail "$tree has no airplay"
+[ -x "$tree/apps/nowplaying/neochumby-nowplaying" ] || fail "$tree has no nowplaying"
+# Where NOW PLAYING is on neochumby-home: rows of apps from y=44, 36 high
+# with 4 between, in name order, those with a title and exec; more than
+# four go three to a page, with MORE in the fourth row (as
+# dev/emulate-smoke).
+index= listed=0
+for d in $(ls "$tree/apps"); do
+  m=$tree/apps/$d/manifest
+  grep -q '^title=' "$m" && grep -q '^exec=' "$m" || continue
+  [ "$d" = nowplaying ] && index=$listed
+  listed=$((listed + 1))
+done
+row_y() { echo $((44 + $1 * 40 + 18)); }
+if [ "$listed" -le 4 ]; then page=0 row=$index; else page=$((index / 3)) row=$((index % 3)); fi
 fake=$out/fake
 rm -rf "$out/nd" "$out/psp0" "$fake"
 mkdir -p "$out/psp0" "$fake"
@@ -83,20 +99,38 @@ until_ok "[ -f '$state/psp/neochumby.conf' ] && [ -f '$state/psp/neochumby.key' 
   fail "the Chumby didn't keep the pairing"
 emu stop
 
-step "paired: the stream opens the screen"
+step "paired: NOW PLAYING, ready for AirPlay"
 emu start --server "$api" "$tree"
-emu wait log 'neochumby: opening airplay' 60 || fail "the stream didn't open the screen"
-until_ok "grep -q 'neochumbyd: airplay for chumby' '$out/neochumbyd.log'" 10 || fail "neochumbyd ran no companion"
+emu wait log 'neochumby: opening home' 30 || fail "the home screen didn't open"
+emu wait log "neochumby-nowplaying: the airplay app's metadata: connected" 60 ||
+  fail "nowplaying's service didn't reach the airplay app"
+until_ok "grep -q 'neochumbyd: airplay for chumby' '$out/neochumbyd.log'" 30 || fail "neochumbyd ran no airplay companion"
+until_ok "grep -q 'neochumbyd: nowplaying for chumby' '$out/neochumbyd.log'" 30 || fail "neochumbyd ran no nowplaying companion"
+emu wait screen 30 || fail "the home screen didn't draw"
+i=0
+while [ "$i" -lt "$page" ]; do
+  tap 160 "$(row_y 3)"
+  i=$((i + 1))
+done
+tap 160 "$(row_y "$row")"
+emu wait log 'neochumby: opening nowplaying' 10 || fail "NOW PLAYING didn't open"
+# Ready: the background where the cover goes, and the name in the accent.
+until_ok "[ \"\$('$dev/emulate' --state '$state' pixel 20 20)\" = '#101021' ]" 30 || fail "the screen isn't idle"
+emu wait screen 30 || fail "the screen didn't settle"
+emu shot "$out/1-ready.png"
+
+step "the phone plays: the track and its cover"
+echo play >> "$fake/cmd"
 # The generated cover's top-left quarter is red, at the cover box's corner.
 until_ok "[ \"\$('$dev/emulate' --state '$state' pixel 20 20)\" = '#ff0000' ]" 30 || fail "no cover art on the screen"
 emu wait screen 30 || fail "the screen didn't settle"
-emu shot "$out/1-playing.png"
+emu shot "$out/2-playing.png"
 
 step "play/pause reaches the sender"
 tap "$PLAY_X" "$BUTTONS_Y"
 until_ok "grep -qx 'playpause 424242' '$fake/requests.log'" 15 || fail "play/pause didn't reach the sender"
 emu wait screen 30 || fail "the screen didn't settle"
-emu shot "$out/2-paused.png"
+emu shot "$out/3-paused.png"
 
 step "next reaches the sender, and its track shows"
 tap "$NEXT_X" "$BUTTONS_Y"
@@ -104,15 +138,15 @@ until_ok "grep -qx 'nextitem 424242' '$fake/requests.log'" 15 || fail "next didn
 # The second cover's top-left quarter is yellow.
 until_ok "[ \"\$('$dev/emulate' --state '$state' pixel 20 20)\" = '#ffff00' ]" 30 || fail "the next track's cover didn't show"
 emu wait screen 30 || fail "the screen didn't settle"
-emu shot "$out/3-next.png"
+emu shot "$out/4-next.png"
 
 step "the stream ends: ready for AirPlay"
-echo end > "$fake/cmd"
+echo end >> "$fake/cmd"
 # The idle screen has no cover box: its corner is the background again
 # (16, 16, 32 in RGB565, widened as dev/fb2png.py does).
 until_ok "[ \"\$('$dev/emulate' --state '$state' pixel 20 20)\" = '#101021' ]" 30 || fail "the screen didn't go idle"
 emu wait screen 30 || fail "the screen didn't settle"
-emu shot "$out/4-ready.png"
+emu shot "$out/5-ended.png"
 
 emu log > "$out/log.txt"
 cp "$fake/requests.log" "$out/requests.txt"
@@ -121,4 +155,4 @@ echo "-- the session's log:"
 cat "$out/log.txt"
 echo "-- the sender's requests:"
 cat "$out/requests.txt"
-echo "dev/emulate-airplay: all passed"
+echo "dev/emulate-nowplaying: all passed"

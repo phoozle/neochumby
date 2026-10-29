@@ -37,7 +37,7 @@ fn main() {
     if args.next().as_deref() == Some("cmatrix") {
         cmatrix(args);
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Some(exe) = neochumby::apps::exe() else {
         eprintln!("neochumby-cmatrix: can't find myself");
         std::process::exit(1);
     };

@@ -1610,9 +1610,6 @@ dependencies = [
 name = "neochumby-airplay"
 version = "0.1.0"
 dependencies = [
- "base64",
- "embedded-graphics",
- "image",
  "neochumby",
  "neochumby-proto",
  "neochumby-sys",
@@ -1637,6 +1634,15 @@ dependencies = [
  "cc",
  "neochumby",
  "neochumby-ncurses",
+]
+
+[[package]]
+name = "neochumby-classic"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "neochumby",
+ "neochumby-sys",
 ]
 
 [[package]]
@@ -1704,6 +1710,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-logs"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "neochumby",
+ "neochumby-proto",
+ "neochumby-sys",
+]
+
+[[package]]
 name = "neochumby-macros"
 version = "0.1.0"
 dependencies = [
@@ -1722,6 +1738,18 @@ name = "neochumby-ncurses"
 version = "0.1.0"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "neochumby-nowplaying"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "embedded-graphics",
+ "image",
+ "neochumby",
+ "neochumby-proto",
+ "neochumby-sys",
 ]
 
 [[package]]

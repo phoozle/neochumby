@@ -33,14 +33,20 @@ jobs:
       - run: cargo fmt --check $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.manifest_path | contains("/third_party/") | not) | "-p " + .name')
       # The crates that build for the host: the protocol, sync's rounds (on
       # both sides, so a temporary directory stands in for the stick),
-      # neochumbyd, the manifest tool, the system calls, the macros, and
-      # AirPlay's companion and the parts of its Chumby half that need no
-      # Chumby (its library: frames, the screen's layout).
-      - run: cargo clippy --all-targets -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -- -D warnings
-      - run: cargo clippy -p neochumby-airplay --lib --bin neochumby-airplay-companion -- -D warnings
-      - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros
+      # neochumbyd, the manifest tool, the system calls, the macros,
+      # AirPlay's companion, nowplaying's companion and library (its frames
+      # and the screen's layout), and neochumby-classic's engine (its host
+      # build renders frames to files).
+      - run: cargo clippy --all-targets -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic -- -D warnings
+      - run: cargo clippy -p neochumby-airplay --bin neochumby-airplay-companion -- -D warnings
+      - run: cargo clippy -p neochumby-nowplaying --lib --bin neochumby-nowplaying-companion -- -D warnings
+      # The logs app's text, layout and drawing, and its companion.
+      - run: cargo clippy --all-targets -p neochumby-logs -- -D warnings
+      - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic
       - run: cargo test -p neochumby-proto -p neochumby-sync --features neochumby-proto/noise
-      - run: cargo test -p neochumby-airplay --lib --bin neochumby-airplay-companion
+      - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
+      - run: cargo test -p neochumby-nowplaying --lib --bin neochumby-nowplaying-companion
+      - run: cargo test -p neochumby-logs
 
   cross:
     name: Build for the Chumby and the server (${{ matrix.proto }})
@@ -72,21 +78,25 @@ jobs:
           cargo clippy --release --target armv5te-unknown-linux-musleabi $FEATURES \
             -p neochumby -p neochumby-home -p neochumby-airplay -p neochumby-doom -p neochumby-quake \
             -p neochumby-fetch -p neochumby-htop -p neochumby-top -p neochumby-cmatrix -p neochumby-clock \
-            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact -- -D warnings
+            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact -p neochumby-classic -p neochumby-logs -p neochumby-nowplaying -- -D warnings
           cargo build --release --target armv5te-unknown-linux-musleabi $FEATURES \
             -p neochumby -p neochumby-home -p neochumby-airplay -p neochumby-doom -p neochumby-quake \
             -p neochumby-fetch -p neochumby-htop -p neochumby-top -p neochumby-cmatrix -p neochumby-clock \
-            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact
+            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact -p neochumby-classic -p neochumby-logs -p neochumby-nowplaying
       - name: The server's binaries
         run: |
           cargo build --release --target x86_64-unknown-linux-musl $FEATURES -p neochumbyd
           cargo build --release --target x86_64-unknown-linux-musl $FEATURES \
             -p neochumby-airplay --bin neochumby-airplay-companion
+          cargo build --release --target x86_64-unknown-linux-musl $FEATURES \
+            -p neochumby-logs --bin neochumby-logs-companion
+          cargo build --release --target x86_64-unknown-linux-musl $FEATURES \
+            -p neochumby-nowplaying --bin neochumby-nowplaying-companion
       - name: A tree, as tools/tree lays it out
         if: matrix.proto == 'tls'
         run: |
           tools/tree "$RUNNER_TEMP/tree" doom quake airplay fetch htop top \
-            cmatrix clock bonsai pipes aquarium genact
+            cmatrix clock bonsai pipes aquarium genact classic logs nowplaying
           find "$RUNNER_TEMP/tree" -type f | sort
       # That tree booted as a Chumby would, under qemu-arm (dev/emulate):
       # the home screen, a tap on DOOM, the devices, the corner hold, CHUMBY
@@ -98,12 +108,12 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools
           sudo dev/emulate-smoke "$RUNNER_TEMP/tree" "$RUNNER_TEMP/smoke"
-      # AirPlay's now-playing screen: the companion on a neochumbyd here, with
-      # dev/fake-shairport for shairport-sync, and the emulated Chumby paired
-      # with it.
-      - name: AirPlay's screen under dev/emulate
+      # The nowplaying app: the airplay and nowplaying companions on a
+      # neochumbyd here, with dev/fake-shairport for shairport-sync, and the
+      # emulated Chumby paired with it.
+      - name: Now playing under dev/emulate
         if: matrix.proto == 'tls'
         timeout-minutes: 5
         run: |
-          sudo dev/emulate-airplay "$RUNNER_TEMP/tree" \
-            target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/airplay"
+          sudo dev/emulate-nowplaying "$RUNNER_TEMP/tree" \
+            target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/nowplaying"

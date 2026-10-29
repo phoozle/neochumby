@@ -56,6 +56,7 @@ use neochumby_sys::oss::{self, AFMT_S16_LE, Setting};
 use neochumby_sys::speaker::{Handover, Take};
 
 use crate::debug;
+use crate::session::{Pipe, Request};
 
 const DSP: &str = "/dev/dsp";
 const SPEAKER_MUTE: &str = "/proc/sys/sense1/spkmute";
@@ -452,24 +453,47 @@ impl Drop for Claim {
 
 /// The master volume set and the speaker unmuted while held; dropping it
 /// mutes the speaker and puts the volume back.
-struct Volume {
-    before: Option<u32>,
+///
+/// Only root can mute or set the volume (the kernel checks the mute on
+/// every write), so a jailed app asks the session to, over its request
+/// pipe (`speaker <volume>`, `speaker off`); the session puts back the
+/// volume the Chumby booted with.
+enum Volume {
+    Set { before: Option<u32> },
+    Asked(Pipe),
+    Unasked,
 }
 
 impl Volume {
     fn at(volume: u32) -> Volume {
+        if !neochumby_sys::process::is_root() {
+            let Some(mut pipe) = Pipe::from_env() else {
+                report("the speaker", Err(io::Error::other("not root, and no session to ask")));
+                return Volume::Unasked;
+            };
+            report("asking the session for the speaker", pipe.send(&Request::Speaker(Some(volume)).line()));
+            return Volume::Asked(pipe);
+        }
         let before = self::volume();
         report(SET_VOLUME, set_volume(volume));
         report(SPEAKER_MUTE, mute(false));
-        Volume { before }
+        Volume::Set { before }
     }
 }
 
 impl Drop for Volume {
     fn drop(&mut self) {
-        report(SPEAKER_MUTE, mute(true));
-        if let Some(v) = self.before {
-            report(SET_VOLUME, set_volume(v));
+        match self {
+            Volume::Set { before } => {
+                report(SPEAKER_MUTE, mute(true));
+                if let Some(v) = *before {
+                    report(SET_VOLUME, set_volume(v));
+                }
+            }
+            Volume::Asked(pipe) => {
+                report("giving the speaker back to the session", pipe.send(&Request::Speaker(None).line()));
+            }
+            Volume::Unasked => {}
         }
     }
 }

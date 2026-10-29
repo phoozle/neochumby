@@ -16,6 +16,7 @@ clap = { version = "4", default-features = false, features = ["std"] }
 [package.metadata.neochumby]
 title = "GENACT"
 exec = "neochumby-genact"
+access = ["screen", "touch", "terminal"]
 colour = "3cb464"
 
 [lints]

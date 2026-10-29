@@ -1,6 +1,6 @@
 [package]
 name = "neochumby-airplay"
-description = "AirPlay for neochumby: a receiver per Chumby on its neochumbyd, played on the Chumby's speaker, with a now-playing screen"
+description = "AirPlay for neochumby: a receiver per Chumby on its neochumbyd, played on the Chumby's speaker"
 license = "MIT"
 version.workspace = true
 edition.workspace = true
@@ -9,54 +9,29 @@ publish.workspace = true
 # Both halves, so AirPlay comes and goes as this one crate:
 #   neochumby-airplay            the Chumby's: a background service playing
 #                                the stream (the manifest's service=)
-#   neochumby-airplay-screen     the Chumby's: the now-playing screen, in
-#                                front when opened (the manifest's exec=)
 #   neochumby-airplay-companion  neochumbyd's: an AirPlay receiver for the
 #                                Chumby (the manifest's companion=)
-# and a library of what needs no Chumby, tested on the host.
-[lib]
-path = "src/lib.rs"
-
 [[bin]]
 name = "neochumby-airplay"
 path = "src/main.rs"
 
 [[bin]]
-name = "neochumby-airplay-screen"
-path = "src/screen.rs"
-
-[[bin]]
 name = "neochumby-airplay-companion"
-path = "src/companion/main.rs"
+path = "src/companion.rs"
 
 [dependencies]
 neochumby-proto.workspace = true
 neochumby-sys.workspace = true
-embedded-graphics = "0.8"
-# The companion's: shairport-sync's metadata pipe is base64.
-base64 = "0.22"
 
 # Only the Chumby's half uses the device library.
 [target.'cfg(target_arch = "arm")'.dependencies]
 neochumby.workspace = true
 
-# Only the companion, on neochumbyd's host, decodes cover art (tools/tree
-# builds it for the Chumby too, with the app's other binaries, where it
-# never runs and goes without).
-[target.'cfg(not(target_arch = "arm"))'.dependencies]
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-
 [package.metadata.neochumby]
-title = "AIRPLAY"
-exec = "neochumby-airplay-screen"
-colour = "8c64dc"
 service = "neochumby-airplay"
 companion = "neochumby-airplay-companion"
 neochumbyd = "required"
-# FOLLOW-UP, once #54 (the `music` capability) is in main: `music = true`.
-# The service already takes the session's `pause` and `resume` lines, which
-# is what the flag promises; the manifest tool refuses the key until then.
-# And with #45: access = ["screen", "touch", "speaker"].
+access = ["speaker"]
 
 [lints]
 workspace = true

@@ -10,6 +10,8 @@
 //! - Read-only by refusing every write; the capability reported is
 //!   read-write all the same, as only then does nfsserve grant execute in
 //!   ACCESS, which the Chumby's kernel asks for before running a binary.
+//! - Every file is served as root's, without setuid or setgid bits
+//!   ([`attr`]); the Chumby mounts the tree `nosuid,nodev` as well.
 //! - Symbolic links are never followed here: a link is served as a link,
 //!   for the client to resolve, so nothing outside the tree is reachable.
 
@@ -45,6 +47,19 @@ fn id_for(rel: &Path, meta: &Metadata) -> fileid3 {
     }
     let id = (h ^ (h >> 32)) & 0xffff_ffff;
     if id < 2 { id + 2 } else { id }
+}
+
+/// A file's attributes as served: owned by root, with no setuid or setgid
+/// bit and no device number, whatever the tree holds. A file in an app's
+/// directory can't hand out another uid on the Chumby, nor stand for one
+/// of its devices, and no app's uid can match the tree's owner here.
+fn attr(id: fileid3, meta: &Metadata) -> fattr3 {
+    let mut a = metadata_to_fattr3(id, meta);
+    a.mode &= !0o6000;
+    a.uid = 0;
+    a.gid = 0;
+    a.rdev = Default::default();
+    a
 }
 
 impl TreeFs {
@@ -160,7 +175,7 @@ impl NFSFileSystem for TreeFs {
 
     async fn getattr(&self, id: fileid3) -> Result<fattr3, nfsstat3> {
         let (_, meta) = self.meta(id)?;
-        Ok(metadata_to_fattr3(id, &meta))
+        Ok(attr(id, &meta))
     }
 
     async fn read(&self, id: fileid3, offset: u64, count: u32) -> Result<(Vec<u8>, bool), nfsstat3> {
@@ -192,11 +207,7 @@ impl NFSFileSystem for TreeFs {
         Ok(ReadDirResult {
             entries: rest[..take]
                 .iter()
-                .map(|(id, name, meta)| DirEntry {
-                    fileid: *id,
-                    name: name.clone(),
-                    attr: metadata_to_fattr3(*id, meta),
-                })
+                .map(|(id, name, meta)| DirEntry { fileid: *id, name: name.clone(), attr: attr(*id, meta) })
                 .collect(),
             end: take == rest.len(),
         })
@@ -269,6 +280,8 @@ impl NFSFileSystem for TreeFs {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     fn tree() -> (PathBuf, TreeFs) {
@@ -299,6 +312,11 @@ mod tests {
         assert!(fs.read(esc, 0, 10).await.is_err());
 
         assert!(matches!(fs.write(m, 0, b"x").await, Err(nfsstat3::NFS3ERR_ROFS)));
+
+        // No setuid or setgid bit, and root's.
+        std::fs::set_permissions(root.join("apps/doom/manifest"), std::fs::Permissions::from_mode(0o6755)).unwrap();
+        let a = fs.getattr(m).await.unwrap();
+        assert_eq!((a.mode & 0o7777, a.uid, a.gid), (0o755, 0, 0));
         let names: Vec<_> = fs.readdir(apps, 0, 10).await.unwrap().entries.into_iter().map(|e| e.name.0).collect();
         assert_eq!(names, [b"doom".to_vec(), b"escape".to_vec()]);
 

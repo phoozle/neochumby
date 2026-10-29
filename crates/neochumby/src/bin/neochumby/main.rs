@@ -38,7 +38,10 @@
 
 mod button;
 mod child;
+mod companion;
 mod devlink;
+mod jail;
+mod network;
 mod run;
 mod services;
 mod start;
@@ -51,7 +54,7 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use neochumby::apps::{self, App, Needs};
@@ -153,12 +156,76 @@ fn open_button(again: bool) -> Option<File> {
     }
 }
 
+/// The speaker as the session sets it for the apps: a master volume
+/// (None: leave it), unmuted or not.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Speaker {
+    volume: Option<u32>,
+    unmuted: bool,
+}
+
+impl Speaker {
+    /// As one word for an atomic: the volume in the low byte (0xff for
+    /// none), unmuted in bit 8.
+    fn word(self) -> u32 {
+        self.volume.map_or(0xff, |v| v.min(100)) | u32::from(self.unmuted) << 8
+    }
+
+    fn from_word(w: u32) -> Speaker {
+        Speaker { volume: Some(w & 0xff).filter(|v| *v <= 100), unmuted: w & 0x100 != 0 }
+    }
+}
+
+/// What the volume thread is asked for and has done, as [`Speaker::word`]s.
+/// audio::set_volume runs the stock chumby_set_volume, which the loop
+/// mustn't wait on, and one thread applying the latest keeps the order.
+/// (Atomics, not a Mutex: std's waits on futex flags 2.6.16 lacks.)
+struct Volumes {
+    want: AtomicU32,
+    done: AtomicU32,
+}
+
+impl Volumes {
+    /// Starts the thread; nothing is asked of it yet.
+    fn start() -> Arc<Volumes> {
+        let v = Arc::new(Volumes { want: AtomicU32::new(u32::MAX), done: AtomicU32::new(u32::MAX) });
+        let t = v.clone();
+        std::thread::spawn(move || {
+            loop {
+                let w = t.want.load(Ordering::SeqCst);
+                if w == t.done.load(Ordering::SeqCst) {
+                    neochumby::sleep_ms(20);
+                    continue;
+                }
+                let s = Speaker::from_word(w);
+                if let Some(v) = s.volume
+                    && let Err(e) = audio::set_volume(v)
+                {
+                    eprintln!("neochumby: setting the volume: {e}");
+                }
+                // Unmuted only if that is still what's wanted: a reset that
+                // came while the volume was being set has muted it.
+                let mute = !(s.unmuted && t.want.load(Ordering::SeqCst) == w);
+                match audio::mute(mute) {
+                    Ok(()) => eprintln!(
+                        "neochumby: the speaker: {}, volume {:?}",
+                        if mute { "muted" } else { "unmuted" },
+                        s.volume
+                    ),
+                    Err(e) => eprintln!("neochumby: the speaker's mute: {e}"),
+                }
+                t.done.store(w, Ordering::SeqCst);
+            }
+        });
+        v
+    }
+}
+
 /// The Chumby, as the session's loop sees it.
 struct Chumby {
     escape: Arc<AtomicBool>,
     boot_volume: Option<u32>,
-    /// A thread is putting the volume back.
-    restoring: Arc<AtomicBool>,
+    speaker: Arc<Volumes>,
     button: Option<File>,
     /// When the session last tried to open the button, while it hasn't got
     /// it; None once it has closed it for good.
@@ -174,29 +241,22 @@ impl run::Device for Chumby {
         self.escape.swap(false, Ordering::SeqCst)
     }
 
-    /// Mutes at once (a write to /proc). The volume is put back by a
-    /// thread, since audio::set_volume runs the stock chumby_set_volume and
-    /// the loop mustn't wait on it; one at a time. As the session ends, it
-    /// waits for that, up to `wait`.
+    /// Mutes at once (a write to /proc); the volume thread puts the boot's
+    /// volume back. As the session ends, it waits for that, up to `wait`.
     fn reset_speaker(&mut self, wait: Duration) {
         if let Err(e) = audio::mute(true) {
             eprintln!("neochumby: muting the speaker: {e}");
         }
-        if let Some(v) = self.boot_volume
-            && !self.restoring.swap(true, Ordering::SeqCst)
-        {
-            let restoring = self.restoring.clone();
-            std::thread::spawn(move || {
-                if let Err(e) = audio::set_volume(v) {
-                    eprintln!("neochumby: setting the volume: {e}");
-                }
-                restoring.store(false, Ordering::SeqCst);
-            });
-        }
+        let want = Speaker { volume: self.boot_volume, unmuted: false }.word();
+        self.speaker.want.store(want, Ordering::SeqCst);
         let deadline = Instant::now() + wait;
-        while self.restoring.load(Ordering::SeqCst) && Instant::now() < deadline {
+        while self.speaker.done.load(Ordering::SeqCst) != want && Instant::now() < deadline {
             neochumby::sleep_ms(20);
         }
+    }
+
+    fn unmute(&mut self, volume: u32) {
+        self.speaker.want.store(Speaker { volume: Some(volume), unmuted: true }.word(), Ordering::SeqCst);
     }
 
     fn speaker_holder(&self) -> Option<u32> {
@@ -249,6 +309,7 @@ fn session() {
     let link = devlink::Link::start();
     let root = apps::root();
     let all = apps::all(&root);
+    jail::init(&all);
     match conf::refresh_hook(&root) {
         Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", conf::HOOK),
         Ok(false) => {}
@@ -280,7 +341,7 @@ fn session() {
             let chumby = Chumby {
                 escape,
                 boot_volume,
-                restoring: Arc::default(),
+                speaker: Volumes::start(),
                 button: open_button(false),
                 button_tried: Some(Instant::now()),
                 restart: link.as_ref().map(devlink::Link::restart_flag),
@@ -333,6 +394,9 @@ fn core_services(root: &Path, settings: &[(String, String)]) -> Vec<App> {
         start: false,
         interrupt: false,
         button: false,
+        // It mounts the stick.
+        companion: false,
+        access: neochumby::apps::Access { root: true, ..Default::default() },
     }]
 }
 

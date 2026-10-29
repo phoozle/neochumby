@@ -18,16 +18,18 @@
 //! never told what is in front, and what they ask for is dropped, so the
 //! interruption rules never come into it.
 
+use std::collections::HashSet;
 use std::path::Path;
-use std::process::Child;
 use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
 use neochumby::session::{Notice, Pipe, Request};
 
+use neochumby_sys::jail::Process;
 use neochumby_sys::process::{Signal, exited, kill_group};
 
 use crate::child;
+use crate::jail::{self, Role};
 
 /// The waits between a service's runs.
 #[derive(Clone, Copy)]
@@ -54,7 +56,7 @@ impl Backoff {
 }
 
 struct Running {
-    child: Child,
+    child: Process,
     pipe: Pipe,
     since: Instant,
     /// The app in front, if this service hasn't been told yet: its pipe
@@ -146,6 +148,23 @@ impl<'a> Services<'a> {
         ev
     }
 
+    /// Ends each running service whose app lists no `network` but whose
+    /// uid is among `owners` (network.rs). The next poll finds it exited,
+    /// and starts it again later, as any service that exits.
+    pub fn end_offline(&mut self, owners: &HashSet<u32>) {
+        for s in &self.list {
+            if let Some(r) = &s.running
+                && jail::offline(s.app).is_some_and(|n| owners.contains(&n))
+            {
+                eprintln!(
+                    "neochumby: service {} has an internet socket open, without network access; ending it",
+                    s.app.name
+                );
+                let _ = kill_group(r.child.id(), Signal::Kill);
+            }
+        }
+    }
+
     /// Tells each running service that `app` is now in front.
     pub fn front(&mut self, app: &str) {
         for s in self.list.iter_mut().filter(|s| !s.core) {
@@ -174,7 +193,7 @@ impl<'a> Services<'a> {
 
 impl Service<'_> {
     fn start(&mut self, root: &Path, front: &str) {
-        match child::spawn(child::command(self.exe, &self.app.dir, root), &[]) {
+        match child::launch(self.app, self.exe, Role::Service, root).spawn() {
             Ok((child, pipe)) => {
                 eprintln!("neochumby: service {} started", self.app.name);
                 let mut r = Running { child, pipe, since: Instant::now(), untold: None };

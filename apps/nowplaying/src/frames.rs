@@ -1,11 +1,16 @@
-//! AirPlay's frames: what the companion sends the Chumby, what the Chumby
-//! sends back, and what the service and the screen say to each other. Each
-//! frame's first byte is its type; the rest is its body.
+//! Now playing's frames: what its companion sends the Chumby, what the
+//! Chumby sends back, and what the service and the screen say to each
+//! other. Each frame's first byte is its type; the rest is its body.
 //!
-//! From the companion (neochumby_proto::frame, as Msg::Data):
+//! From the service to the companion:
 //!
-//!   [0] AUDIO + PCM      S16LE stereo at 44.1 kHz, as it comes
-//!   [1] END              the audio has stopped for now: the speaker can go
+//!   [2] META + bytes     AirPlay's metadata, as the airplay app's service
+//!                        hands it on (shairport-sync's metadata pipe,
+//!                        unparsed; the companion parses it)
+//!   [8] CONTROL          below
+//!
+//! From the companion (neochumby_proto::frame):
+//!
 //!   [2] NAME + UTF-8     the receiver's name, as phones list it
 //!   [3] TRACK            title, artist, album and the sender's name, each
 //!                        a u8 length and that many bytes of UTF-8
@@ -25,9 +30,9 @@
 //!
 //! From the screen to the service, and on to the companion:
 //!
-//!   [8] CONTROL + u8     1 play/pause, 2 next, 3 previous; and from the
-//!                        service alone, 4 pause and 5 play (the session's
-//!                        `pause` and `resume`, for a music app)
+//!   [8] CONTROL + u8     1 play/pause, 2 next, 3 previous; 4 pause and
+//!                        5 play (unused yet: for a session's MUTE, should
+//!                        the app become a music app)
 //!
 //! A frame this end doesn't know is ignored, so types can be added.
 
@@ -35,8 +40,7 @@ use std::io;
 
 use neochumby_proto::frame::MAX_FRAME;
 
-pub const AUDIO: u8 = 0;
-pub const END: u8 = 1;
+pub const META: u8 = 2;
 pub const NAME: u8 = 2;
 pub const TRACK: u8 = 3;
 pub const COVER: u8 = 4;
@@ -280,7 +284,7 @@ mod tests {
     #[test]
     fn what_does_not_add_up_is_ignored() {
         assert_eq!(Frame::parse(&[]), None);
-        assert_eq!(Frame::parse(&[AUDIO, 1, 2]), None);
+        assert_eq!(Frame::parse(&[0, 1, 2]), None);
         assert_eq!(Frame::parse(&[99]), None);
         assert_eq!(Frame::parse(&[TRACK, 5, b'a']), None);
         assert_eq!(Frame::parse(&[STATE, 1, 0, 0]), None);

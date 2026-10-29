@@ -37,7 +37,7 @@ fn main() {
     if args.next().as_deref() == Some("clock") {
         clock(args);
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Some(exe) = neochumby::apps::exe() else {
         eprintln!("neochumby-clock: can't find myself");
         std::process::exit(1);
     };

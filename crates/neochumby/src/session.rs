@@ -13,6 +13,12 @@
 //!
 //!   open <app>     run that app next (an app name: apps/<app>/ in the tree)
 //!   chumby-mode    end neochumby and hand the Chumby back to its software
+//!   speaker <v>    unmute the speaker at master volume v (0-100), for a
+//!                  jailed app with `access = ["speaker"]`, which can't
+//!   speaker off    mute it again and put the boot's volume back
+//!
+//! An app asks for the speaker while it plays (neochumby::audio), and
+//! carries on: only `open` and `chumby-mode` are followed by its exit.
 //!
 //! An app writes its request and then exits. The last request it made
 //! counts. If it hasn't exited a few seconds later, the session ends it.
@@ -61,6 +67,10 @@ pub enum Request {
     Open(String),
     /// End neochumby; the Chumby's own software carries on.
     ChumbyMode,
+    /// Unmute the speaker at this master volume (0-100), or, with None,
+    /// mute it and put back the volume it booted with: for a jailed app,
+    /// which can't (neochumby::audio asks).
+    Speaker(Option<u32>),
 }
 
 impl Request {
@@ -70,6 +80,8 @@ impl Request {
         match (words.next()?, words.next(), words.next()) {
             ("open", Some(app), None) if valid_name(app) => Some(Request::Open(app.to_string())),
             ("chumby-mode", None, None) => Some(Request::ChumbyMode),
+            ("speaker", Some("off"), None) => Some(Request::Speaker(None)),
+            ("speaker", Some(v), None) => v.parse().ok().filter(|v| *v <= 100).map(|v| Request::Speaker(Some(v))),
             _ => None,
         }
     }
@@ -79,6 +91,8 @@ impl Request {
         match self {
             Request::Open(app) => format!("open {app}\n"),
             Request::ChumbyMode => "chumby-mode\n".into(),
+            Request::Speaker(Some(v)) => format!("speaker {v}\n"),
+            Request::Speaker(None) => "speaker off\n".into(),
         }
     }
 }

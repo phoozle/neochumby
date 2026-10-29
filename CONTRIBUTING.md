@@ -50,7 +50,7 @@ rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 # CMake 3.21 or later, for fetch
 cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
-tools/tree /tmp/tree doom quake airplay fetch htop top   # a whole tree, with apps
+tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
 ```
 
 CI runs the same checks on every pull request. To run them yourself:
@@ -186,14 +186,16 @@ artwork. The script checks that:
 
 Where it taps comes from the pictures' own tap zones.
 
-**AirPlay's now-playing screen** (`dev/emulate-airplay TREE NEOCHUMBYD
-OUT`; CI runs it). A neochumbyd on the PC runs the airplay app's companion
-with `dev/fake-shairport` in shairport-sync's place: made-up metadata, a
-generated cover, silence, and a sender's remote-control server. The
-emulated Chumby pairs through neochumby-home's PAIR, and the script checks
-that:
-- the stream beginning opens the screen over the home screen, with the
-  cover in its box;
+**Now playing** (`dev/emulate-nowplaying TREE NEOCHUMBYD OUT`; CI runs
+it). A neochumbyd on the PC runs the airplay and nowplaying apps'
+companions, with `dev/fake-shairport` in shairport-sync's place: made-up
+metadata, a generated cover, silence, and a sender's remote-control server.
+The emulated Chumby pairs through neochumby-home's PAIR, and the script
+checks that:
+- nowplaying's service reads the airplay app's metadata, and NOW PLAYING,
+  opened from the home screen, is ready for AirPlay;
+- when the fake phone plays, the screen shows the track, with the cover in
+  its box;
 - play/pause and next on the screen reach the sender as DACP requests,
   with its Active-Remote token, and the screen shows their effect;
 - the stream ending leaves the screen ready for AirPlay.
@@ -280,6 +282,7 @@ neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
 button = true                        # optional: it gets the top button (games)
+access = ["screen", "touch"]         # optional: what it reaches beyond its jail
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -310,10 +313,12 @@ The session (`neochumby`) runs one app at a time in front, full-screen.
 Every app is opened the same way, whoever asked for it.
 
 **When your app is opened**, the session runs its `exec`:
-- in the app's directory in the tree, in a process group of its own;
-- with `NEOCHUMBY_ROOT` (the tree) and `HOME=/tmp`. The root filesystem is
-  read-only, and so is the tree;
+- jailed, as below, in the app's directory in the tree, in a process group
+  of its own;
+- with `NEOCHUMBY_ROOT` (the tree) and `HOME=/tmp`. The tree is read-only;
+  `/tmp` is your app's own;
 - with `NEOCHUMBY_SESSION=<fd>`, its request pipe to the session (below);
+- with `NEOCHUMBY_COMPANION=<fd>` if it has a companion (below);
 - with `NEOCHUMBY_REASON` when the session has a reason to give: `button`
   when the top button opened it. Ignore values you don't know;
 - owning the screen until it exits. What's on the screen when it starts is
@@ -368,6 +373,51 @@ std::process::exit(0);
 `Pipe::from_env()` is None when the app wasn't started by the session (run
 by hand).
 
+**The jail.** The session runs as root; your app doesn't. Its `exec` and
+its `service` run as a user of their own (one uid per app, from 20000), in
+a private mount namespace, chrooted into a small tmpfs that holds:
+- your app's directory from the tree, at the same path, read-only;
+- `/tmp`, your app's own (4 MB, `nosuid,nodev,noexec`), which is `HOME`;
+- `/dev/null`, `zero`, `random` and `urandom`;
+- what its `access` lists, and nothing else:
+
+| `access` | what your app gets |
+|---|---|
+| `screen` | `/dev/fb0`, for its `exec` only, never its `service` |
+| `touch` | the touchscreen and its calibration (`/psp/ts_settings`, read-only), likewise |
+| `speaker` | `/dev/dsp`, and the speaker's handover (`neochumby::audio`). The mute and the volume are the session's: `audio` asks for them over the request pipe |
+| `accel` | the accelerometer |
+| `system` | `/proc`, `/sys` and `/etc` |
+| `network` | `/etc/resolv.conf` and `/etc/hosts`; and internet sockets (below) |
+| `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
+| `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
+| `root` | no jail: it runs as root, as the session does. Listed alone |
+
+It may have 64 processes and 256 open files, and dumps no core. Its users
+can't signal or trace each other, or root, and can't read the Chumby's
+key or write to `/psp`.
+
+**Your binaries.** Each `exec` and `service` must be a static ARM ELF.
+Before it starts one, the session refuses a file with a `PT_LOAD` below
+`0x1000` (page zero), a `PT_INTERP`, or a non-ARM ELF, and it checks every
+executable file in your app's directory the same way. Page zero is where
+the ARM `mmap` check doesn't reach the ELF loader. Put helper programs in
+the app's directory, not in `/tmp`: `/tmp` and the speaker handover are
+`noexec`.
+
+**The network.** The stock kernel can't take the network away from a
+process. Instead, once a second, the session looks for internet sockets in
+`/proc/net`, which lists each socket with its owner's uid. If it finds one
+owned by an app whose `access` doesn't list `network`, it ends the app,
+`exec` or `service`, as if it had crashed. Unix sockets aren't counted.
+Ask for `network` if your app opens a socket at all, even briefly: an
+unlisted one is found sooner or later.
+
+List only what your app uses. `neochumby-manifest` (run by `tools/tree`)
+refuses words it doesn't know. `root` is for `home`, which pairs the
+Chumby and so writes its key. Under `dev/emulate`, which can't mount or
+chroot, every app runs unjailed, as root.
+
 **Start apps.** The start app is the one a Chumby opens at boot and comes
 back to. The owner picks it (`start=<app>`), and it defaults to
 `neochumby-home`. Declaring `start = true` lets your app be picked, and
@@ -397,7 +447,8 @@ schedule, music) belongs in the app's `service`. The session runs each
 app's service, where what it needs of a neochumbyd is here, for as long as
 neochumby runs:
 - with the same environment as an app (`NEOCHUMBY_ROOT`, `HOME=/tmp`,
-  `NEOCHUMBY_SESSION`), in a process group of its own;
+  `NEOCHUMBY_SESSION`), in a process group of its own, in the app's jail
+  but without the screen or the touchscreen;
 - **restarted when it exits**, after 1 second, then 2, 4 and so on up to a
   minute. A run of a minute or more starts the wait again from 1 second;
 - **told what's in front:** `front <app>` on its pipe as it starts, and
@@ -440,19 +491,24 @@ wait, and `Notice::parse`.
 named by `companion`. neochumbyd runs it for each paired Chumby that opens
 the app:
 - **Opening:** the Chumby side calls
-  `neochumby::companion::open(neochumby::companion!(), &paired, &identity)`,
-  which connects to the paired neochumbyd and returns the
-  `neochumby_proto::Session` to its companion. `companion!()` reads the
-  app's `Cargo.toml` as it compiles: an app without a `companion`, or
-  without `neochumbyd`, does not compile.
-- **Frames:** after that, frames go both ways as `Msg::Data`. On the
-  companion's side they arrive on stdin and leave on stdout, a u32
-  big-endian length then the bytes (`neochumby_proto::frame`).
+  `neochumby::companion::open(neochumby::companion!())`, which returns a
+  `Link` to its companion. `companion!()` reads the app's `Cargo.toml` as
+  it compiles: an app without a `companion`, or without `neochumbyd`, does
+  not compile.
+- **Through the session:** apps never hold the Chumby's key. The session
+  opens the connection to neochumbyd for your app, and relays its frames
+  over a socket it hands the app (`NEOCHUMBY_COMPANION`). It opens the
+  companion of the app it started, named by the app's directory, so an app
+  reaches only its own. Run by hand, as root, an app connects itself.
+- **Frames:** `Link::send` and `Link::recv` (`None` once the companion has
+  gone). On the companion's side they arrive on stdin and leave on stdout,
+  a u32 big-endian length then the bytes (`neochumby_proto::frame`).
 - **Environment:** the companion gets `NEOCHUMBY_CHUMBY` (the Chumby's name)
   and `NEOCHUMBY_STATE` (a directory of its own). It should exit when its
   stdin closes.
 
-`apps/airplay` is a worked example of both halves.
+`apps/airplay` is a worked example of both halves, and `apps/logs` one
+whose companion is optional.
 
 ## Files in the tree
 

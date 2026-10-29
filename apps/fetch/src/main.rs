@@ -39,7 +39,7 @@ fn main() {
     if args.next().as_deref() == Some("fastfetch") {
         fastfetch(args);
     }
-    let (Ok(exe), Ok(dir)) = (std::env::current_exe(), std::env::current_dir()) else {
+    let (Some(exe), Ok(dir)) = (neochumby::apps::exe(), std::env::current_dir()) else {
         eprintln!("neochumby-fetch: can't find myself");
         std::process::exit(1);
     };

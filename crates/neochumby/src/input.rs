@@ -19,6 +19,8 @@ use crate::fb;
 
 /// The touchscreen's input device.
 pub const TOUCHSCREEN: &str = "/dev/input/event0";
+/// The stock firmware's touchscreen calibration ([`Calibration`]).
+pub const CALIBRATION: &str = "/psp/ts_settings";
 
 /// The variable holding the top button's descriptor, which the session
 /// hands to an app whose manifest says `button = true`.
@@ -53,7 +55,7 @@ pub struct Calibration {
 impl Calibration {
     pub fn load() -> Calibration {
         let fallback = Calibration { x0: 169, xspan: 3733, y0: 4082, yspan: -4054, swap: false };
-        let Ok(s) = std::fs::read_to_string("/psp/ts_settings") else { return fallback };
+        let Ok(s) = std::fs::read_to_string(CALIBRATION) else { return fallback };
         let v: Vec<i32> = s.trim().split(',').filter_map(|f| f.trim().parse().ok()).collect();
         match v[..] {
             [x0, xspan, y0, yspan, swap] if xspan != 0 && yspan != 0 => {

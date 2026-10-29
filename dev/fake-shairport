@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""A stand-in for shairport-sync, for AirPlay's companion in tests
-(dev/emulate-airplay): no AirPlay, but what shairport-sync would send the
+"""A stand-in for shairport-sync, for the airplay app's companion in tests
+(dev/emulate-nowplaying): no AirPlay, but what shairport-sync would send the
 companion while a phone played to it, and a phone's remote-control (DACP)
 server to take the Chumby's buttons. Stdlib only.
 
     NEOCHUMBY_SHAIRPORT=dev/fake-shairport NEOCHUMBY_FAKE_AIRPLAY=DIR neochumbyd serve ...
 
 Run as the companion runs shairport-sync (`-c CONF`), it reads the metadata
-pipe's path from CONF and plays a made-up stream at once:
+pipe's path from CONF and waits for "play" in DIR/cmd (a phone choosing the
+receiver), then plays a made-up stream:
   - metadata, as shairport-sync writes its pipe: the sender (clip, daid,
     acre, and dapo, the port of its DACP server here on 127.0.0.1), pbeg, a
     track's details, a generated cover (PNG), and progress;
@@ -16,8 +17,7 @@ pipe's path from CONF and plays a made-up stream at once:
 Its DACP server answers 204 and writes each request, "COMMAND TOKEN", to
 DIR/requests.log. playpause pauses (pfls; the audio stops) or resumes
 (prsm); nextitem starts a second track with another cover; previtem goes
-back to the start of the track. Writing "end" to DIR/cmd ends the stream
-(pend).
+back to the start of the track. "end" in DIR/cmd ends the stream (pend).
 """
 import base64
 import http.server
@@ -135,6 +135,15 @@ def main(argv):
     server = http.server.HTTPServer(("127.0.0.1", 0), Dacp)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
+    cmd = os.path.join(out, "cmd")
+
+    def asked(word):
+        return os.path.exists(cmd) and word in open(cmd).read().split()
+
+    state["playing"] = False
+    while not asked("play"):
+        time.sleep(0.1)
+    state["playing"], state["at"] = True, time.monotonic()
     pipe.item(b"ssnc", b"snam", b"Fake iPhone")
     pipe.item(b"ssnc", b"clip", b"127.0.0.1")
     pipe.item(b"ssnc", b"daid", b"FA4E0001")
@@ -144,10 +153,9 @@ def main(argv):
     track(pipe, 0)
 
     silence = bytes(RATE // 10 * 4)
-    cmd = os.path.join(out, "cmd")
     ended = False
     while True:
-        if not ended and os.path.exists(cmd) and open(cmd).read().strip() == "end":
+        if not ended and asked("end"):
             ended = True
             state["playing"] = False
             pipe.item(b"ssnc", b"pend")

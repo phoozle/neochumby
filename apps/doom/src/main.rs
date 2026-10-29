@@ -1,6 +1,7 @@
 //! Doom as a neochumby app: doomgeneric (C, GPL-2.0) on the Chumby's screen,
 //! touchscreen, squeeze switch and speaker (sound effects; no music yet). The IWAD is found beside the binary
-//! (freedoom1.wad, doom1.wad) unless NEOCHUMBY_WAD or -iwad says otherwise.
+//! (freedoom1.wad, doom1.wad), or in the working directory, unless NEOCHUMBY_WAD or -iwad says
+//! otherwise.
 
 // FFI to a C engine (GPL), so allowed unsafe code, as neochumby-sys is. Its
 // unsafe blocks follow the engine's contract and carry no SAFETY comments.
@@ -13,7 +14,12 @@ mod sound;
 use std::path::PathBuf;
 
 fn iwad() -> Option<PathBuf> {
-    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    // Jailed, without /proc, the binary can't be found: the session runs
+    // it in its directory.
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| Some(e.parent()?.to_path_buf()))
+        .or_else(|| std::env::current_dir().ok())?;
     std::env::var_os("NEOCHUMBY_WAD")
         .map(PathBuf::from)
         .into_iter()

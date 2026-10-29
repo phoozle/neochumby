@@ -140,9 +140,10 @@ elif [ -n "$server" ]; then
   deadline 20 sh -c "until ping -c 1 $server >/dev/null 2>&1; do sleep 1; done" || exit 0
   mkdir -p "$MNT"
   # No port mapper (ports given), no lock manager (nolock), TCP; soft with
-  # short timeouts so a lost network fails reads instead of hanging.
+  # short timeouts so a lost network fails reads instead of hanging;
+  # nosuid,nodev: nothing in the tree hands out another uid, or a device.
   deadline 15 mount -t nfs \
-    -o "ro,nolock,tcp,nfsvers=3,port=${nfs_port:-2049},mountport=${mount_port:-20048},soft,timeo=30,retrans=2,retry=0" \
+    -o "ro,nosuid,nodev,nolock,tcp,nfsvers=3,port=${nfs_port:-2049},mountport=${mount_port:-20048},soft,timeo=30,retrans=2,retry=0" \
     "$server:${path:-/}" "$MNT" || {
     echo "mount failed"
     exit 0

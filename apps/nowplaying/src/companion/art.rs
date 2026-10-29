@@ -3,7 +3,7 @@
 //! screen's cover box, as RGB565. The Chumby's ARM926 has no FPU, and
 //! decoding a JPEG there would take seconds.
 
-use neochumby_airplay::frames::Cover;
+use neochumby_nowplaying::frames::Cover;
 
 /// `pict` scaled to fit `side` by `side`, keeping its shape; None if it
 /// isn't a picture this can decode.

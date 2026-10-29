@@ -874,7 +874,9 @@ def supervise(state, opts, tree, stick_fd, interp, fixed):
     write(state, "exit", f"exit {code}" if code >= 0 else f"signal {-code}")
 
 
-BASE_ENV = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "QEMU_CPU": "arm926"}
+# NEOCHUMBY_JAIL=off: the session can't mount or chroot here (below), so it
+# runs the apps unjailed, as root; the jails are tested on a Chumby.
+BASE_ENV = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "QEMU_CPU": "arm926", "NEOCHUMBY_JAIL": "off"}
 
 # What the session runs without: root's ways out of a chroot and a mount
 # namespace, and into the PC (its devices, kernel, clock, network setup).

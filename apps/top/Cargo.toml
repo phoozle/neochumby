@@ -18,6 +18,8 @@ cc = "1"
 [package.metadata.neochumby]
 title = "TOP"
 exec = "neochumby-top"
+# Reads every process from /proc.
+access = ["screen", "touch", "system", "terminal"]
 colour = "c8a028"
 
 [lints]

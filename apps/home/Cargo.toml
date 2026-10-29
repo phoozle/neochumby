@@ -14,6 +14,8 @@ neochumby-sys.workspace = true
 [package.metadata.neochumby]
 exec = "neochumby-home"
 start = true
+# It pairs the Chumby (writing /psp) and lists every app in the tree.
+access = ["root"]
 
 [lints]
 workspace = true

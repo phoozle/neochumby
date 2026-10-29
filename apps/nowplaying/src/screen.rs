@@ -1,14 +1,15 @@
-//! AirPlay's now-playing screen, the app's `exec`: the track's title,
+//! Now playing's screen, the app's `exec`: the track's title,
 //! artist, album and cover art, a progress bar, and previous, play/pause
 //! and next; or, with nothing playing, "Ready for AirPlay" and the name to
-//! choose on the phone (neochumby_airplay::ui draws it).
+//! choose on the phone (neochumby_nowplaying::ui draws it).
 //!
 //! It knows only what the service tells it, over the local socket
-//! (neochumby_airplay::link): the service has the companion. A button goes
+//! (neochumby_nowplaying::link): the service has the companion. A button goes
 //! back the same way, to the sender as a remote-control command; play/pause
 //! shows its effect at once, until the sender's own report a second or two
 //! later. Without the service (it starts with the session, and only on a
-//! paired Chumby) it says it's waiting, and tries again each second.
+//! paired Chumby) it says it's waiting, and tries again each second. It
+//! never opens itself: it's opened from the app list like any app.
 //!
 //! One loop, without threads (the Chumby's kernel lacks the futex calls
 //! std's would wait on): the socket and the touchscreen are read without
@@ -20,10 +21,10 @@ use std::time::{Duration, Instant};
 
 use neochumby::fb::Fb;
 use neochumby::input::{Touch, Touchscreen};
-use neochumby_airplay::frames::{Control, Frame, Play};
-use neochumby_airplay::link::{self, Peer};
-use neochumby_airplay::nowplaying::NowPlaying;
-use neochumby_airplay::ui::{self, Canvas};
+use neochumby_nowplaying::frames::{Control, Frame, Play};
+use neochumby_nowplaying::link::{self, Peer};
+use neochumby_nowplaying::nowplaying::NowPlaying;
+use neochumby_nowplaying::ui::{self, Canvas};
 
 /// How often the loop runs.
 const TICK_MS: u32 = 30;
@@ -36,7 +37,7 @@ const ECHO: Duration = Duration::from_millis(350);
 const RETRY: Duration = Duration::from_secs(1);
 
 fn main() {
-    neochumby::debug::install("neochumby-airplay-screen");
+    neochumby::debug::install("neochumby-nowplaying");
     let mut fb = Fb::open().expect("/dev/fb0");
     let mut touch = Touchscreen::open();
     let mut canvas = Canvas::new();
@@ -65,7 +66,7 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    eprintln!("neochumby-airplay-screen: the service: {e}");
+                    eprintln!("neochumby-nowplaying: the service: {e}");
                     service = None;
                     retry_at = Instant::now() + RETRY;
                     dirty |= np.apply(Frame::Link(false), now_ms());
@@ -93,7 +94,7 @@ fn main() {
                     match sent {
                         Some(Ok(())) => np.pressed(c, now_ms()),
                         Some(Err(e)) => {
-                            eprintln!("neochumby-airplay-screen: the service: {e}");
+                            eprintln!("neochumby-nowplaying: the service: {e}");
                             service = None;
                         }
                         None => {}

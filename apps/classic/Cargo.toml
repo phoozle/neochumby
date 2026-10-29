@@ -1,0 +1,39 @@
+[package]
+name = "neochumby-classic"
+description = "The 2008 Chumby's look as an app: pages and screens a feeder prerenders, shown with wipes, panes, tap zones and animation"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "neochumby-classic"
+path = "src/main.rs"
+
+[[bin]]
+name = "neochumby-classic-service"
+path = "src/bin/service.rs"
+
+[dependencies]
+libc.workspace = true
+neochumby-sys.workspace = true
+
+# Only the Chumby's build uses the device library. On the host the binary
+# renders frames to files (`neochumby-classic render`), so the engine is checked
+# and tested without a framebuffer.
+[target.'cfg(target_arch = "arm")'.dependencies]
+neochumby.workspace = true
+
+# The start app (start=classic); its service keeps the backlight and the
+# music going while another app is in front.
+[package.metadata.neochumby]
+exec = "neochumby-classic"
+start = true
+service = "neochumby-classic-service"
+# Unjailed, as home is: the app and its service share /tmp/neochumby-classic,
+# and they set the backlight and the volume and keep state in /psp, which
+# no access word grants yet.
+access = ["root"]
+
+[lints]
+workspace = true

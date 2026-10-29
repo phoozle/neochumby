@@ -1,0 +1,42 @@
+[package]
+name = "neochumby-logs"
+description = "A log viewer for neochumby: the Chumby's own logs, and with a neochumbyd the host's, scrolled by touch"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Both halves, as airplay has them:
+#   neochumby-logs            the Chumby's: the viewer
+#   neochumby-logs-companion  neochumbyd's: the host's logs, as configured
+#                             there (the manifest's companion=)
+[[bin]]
+name = "neochumby-logs"
+path = "src/main.rs"
+
+[[bin]]
+name = "neochumby-logs-companion"
+path = "src/companion.rs"
+
+[dependencies]
+neochumby-proto.workspace = true
+neochumby-sys.workspace = true
+embedded-graphics = "0.8"
+
+# Only the Chumby's build uses the device library. On the host the text,
+# the layout and the drawing (onto any embedded-graphics target) are tested
+# without a framebuffer.
+[target.'cfg(target_arch = "arm")'.dependencies]
+neochumby.workspace = true
+
+[package.metadata.neochumby]
+title = "LOGS"
+exec = "neochumby-logs"
+colour = "7890a8"
+companion = "neochumby-logs-companion"
+neochumbyd = "optional"
+# The Chumby's logs, read-only, in its jail.
+access = ["screen", "touch", "logs"]
+
+[lints]
+workspace = true

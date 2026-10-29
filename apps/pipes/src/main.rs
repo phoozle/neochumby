@@ -54,7 +54,7 @@ fn main() {
         }
         return;
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Some(exe) = neochumby::apps::exe() else {
         eprintln!("neochumby-pipes: can't find myself");
         std::process::exit(1);
     };
